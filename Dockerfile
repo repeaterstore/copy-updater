@@ -41,6 +41,12 @@ COPY --from=build /app/lib ./lib
 # by a specifier the bundler externalises, and the migration scripts run outside
 # the Next build graph.
 COPY --from=build /app/node_modules/single-file-cli ./node_modules/single-file-cli
+# nft only partially traces playwright: lib/ makes it in but browsers.json does
+# not, and coreBundle.js requires it at module load — so every page importing
+# the capture actions 500s with "Cannot find module browsers.json". Copy the
+# complete packages over the traced shards.
+COPY --from=build /app/node_modules/playwright ./node_modules/playwright
+COPY --from=build /app/node_modules/playwright-core ./node_modules/playwright-core
 COPY --from=build /app/node_modules/drizzle-orm ./node_modules/drizzle-orm
 COPY --from=deps  /app/node_modules/drizzle-kit ./node_modules/drizzle-kit
 COPY --from=deps  /app/node_modules/tsx ./node_modules/tsx
