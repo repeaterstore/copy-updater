@@ -1,0 +1,5 @@
+Static assets served at the site root (favicon, robots.txt, images).
+
+Kept in git deliberately: the Dockerfile copies public/ into the runtime image,
+and Docker fails the build outright when a COPY source does not exist. An empty
+directory would vanish from git and break the deploy.
