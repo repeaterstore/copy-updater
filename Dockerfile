@@ -58,7 +58,9 @@ COPY --from=build /app/drizzle.config.ts ./drizzle.config.ts
 COPY --from=build /app/package.json ./package.json
 
 RUN mkdir -p /data && chown -R pwuser:pwuser /data /app
-USER pwuser
+# No USER directive: the container starts as root so scripts/entrypoint.sh can
+# chown the Railway volume (mounted root-owned at runtime), then drops to
+# pwuser before migrating and serving.
 
 EXPOSE 3000
 ENV PORT=3000
@@ -66,4 +68,4 @@ ENV HOSTNAME=0.0.0.0
 
 # Migrate then serve. Railway restarts the container on failure, so a failed
 # migration surfaces loudly instead of booting a server against a stale schema.
-CMD ["sh", "-c", "node_modules/.bin/tsx scripts/migrate.ts && node server.js"]
+CMD ["sh", "scripts/entrypoint.sh"]
