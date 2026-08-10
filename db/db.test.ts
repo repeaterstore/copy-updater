@@ -1,0 +1,172 @@
+/**
+ * Integration test for the schema, run against PGlite — a real Postgres engine
+ * compiled to WASM, so migrations, jsonb round-trips, cascades and self-
+ * references behave exactly as they will on Railway Postgres.
+ */
+import test from "node:test";
+import assert from "node:assert/strict";
+import { PGlite } from "@electric-sql/pglite";
+import { drizzle } from "drizzle-orm/pglite";
+import { migrate } from "drizzle-orm/pglite/migrator";
+import { eq } from "drizzle-orm";
+import * as schema from "./schema";
+import type { Op, Resolved } from "@/lib/ops/types";
+
+async function freshDb() {
+  const client = new PGlite();
+  const db = drizzle(client, { schema });
+  await migrate(db, { migrationsFolder: "./drizzle" });
+  return { db, client };
+}
+
+test("migrations apply and every table exists", async () => {
+  const { db, client } = await freshDb();
+  const result = await client.query<{ table_name: string }>(
+    "select table_name from information_schema.tables where table_schema = 'public'",
+  );
+  const names = result.rows.map((r) => r.table_name).sort();
+  for (const expected of [
+    "ai_runs", "comments", "pages", "settings", "snapshots", "users", "versions",
+  ]) {
+    assert.ok(names.includes(expected), `table ${expected} exists`);
+  }
+  await client.close();
+  void db;
+});
+
+test("a version tree round-trips with typed jsonb intact", async () => {
+  const { db, client } = await freshDb();
+
+  const [user] = await db
+    .insert(schema.users)
+    .values({ email: "copy@waveform.com", name: "Copywriter" })
+    .returning();
+
+  const [page] = await db
+    .insert(schema.pages)
+    .values({
+      url: "https://example.com/product",
+      name: "Product page",
+      brief: "Confident, plain language. Target: signal booster buyers.",
+      createdBy: user.id,
+    })
+    .returning();
+
+  const [snapshot] = await db
+    .insert(schema.snapshots)
+    .values({
+      pageId: page.id,
+      status: "ready",
+      htmlPath: "snapshots/a.html",
+      skeletonPath: "snapshots/a.skeleton.html",
+      screenshotPath: "snapshots/a.png",
+      blocks: [
+        {
+          id: "body/main:1/h1:1", tag: "h1", role: "heading",
+          html: "Old", text: "Old", order: 0, sectionLabel: null,
+          classes: ["hero__title"], box: { x: 0, y: 0, w: 800, h: 60 },
+        },
+      ],
+      meta: {
+        title: "Old Title", description: "Old desc",
+        ogTitle: null, ogDescription: null, canonical: null,
+      },
+      cssIndex: { "body/main:1/h1:1": ["hero__title", "hero"] },
+    })
+    .returning();
+
+  const ops: Op[] = [
+    { t: "setText", id: "body/main:1/h1:1", html: "New headline" },
+    { t: "addStyle", css: ".hero__title{font-size:3rem}" },
+  ];
+  const resolved: Resolved = {
+    blocks: [
+      {
+        id: "body/main:1/h1:1", tag: "h1", role: "heading",
+        html: "New headline", text: "New headline", order: 0,
+        sectionLabel: null, classes: ["hero__title"], box: null,
+      },
+    ],
+    meta: {
+      title: "Old Title", description: "Old desc",
+      ogTitle: null, ogDescription: null, canonical: null,
+    },
+    styles: [".hero__title{font-size:3rem}"],
+  };
+
+  const [v1] = await db
+    .insert(schema.versions)
+    .values({
+      pageId: page.id, snapshotId: snapshot.id, authorId: user.id,
+      label: "Copy pass", status: "proposed", ops, resolved,
+    })
+    .returning();
+
+  // Fork: a child pointing at v1, which is what "compare any two" relies on.
+  const [v2] = await db
+    .insert(schema.versions)
+    .values({
+      pageId: page.id, snapshotId: snapshot.id, parentVersionId: v1.id,
+      authorId: user.id, label: "Sina review", status: "draft",
+      ops: [...ops, { t: "setMeta", title: "Newer Title" }],
+    })
+    .returning();
+
+  const reloaded = await db.query.versions.findFirst({ where: eq(schema.versions.id, v1.id) });
+  assert.equal(reloaded?.ops.length, 2);
+  assert.equal(reloaded?.ops[0].t, "setText");
+  assert.equal(reloaded?.resolved?.blocks[0].text, "New headline");
+  assert.deepEqual(reloaded?.resolved?.styles, [".hero__title{font-size:3rem}"]);
+
+  const child = await db.query.versions.findFirst({ where: eq(schema.versions.id, v2.id) });
+  assert.equal(child?.parentVersionId, v1.id);
+  assert.equal(child?.ops.length, 3);
+
+  // Snapshot blocks keep their nested shape.
+  const snap = await db.query.snapshots.findFirst({ where: eq(schema.snapshots.id, snapshot.id) });
+  assert.equal(snap?.blocks[0].box?.w, 800);
+  assert.deepEqual(snap?.cssIndex["body/main:1/h1:1"], ["hero__title", "hero"]);
+
+  await client.close();
+});
+
+test("deleting a page cascades to snapshots, versions and comments", async () => {
+  const { db, client } = await freshDb();
+
+  const [user] = await db.insert(schema.users)
+    .values({ email: "sina@rsrf.com" }).returning();
+  const [page] = await db.insert(schema.pages)
+    .values({ url: "https://example.com", name: "Home", createdBy: user.id }).returning();
+  const [snapshot] = await db.insert(schema.snapshots)
+    .values({ pageId: page.id, status: "ready" }).returning();
+  const [version] = await db.insert(schema.versions)
+    .values({ pageId: page.id, snapshotId: snapshot.id, label: "v1" }).returning();
+  await db.insert(schema.comments)
+    .values({ versionId: version.id, authorId: user.id, body: "Tighten this", blockId: "body/h1:1" });
+
+  await db.delete(schema.pages).where(eq(schema.pages.id, page.id));
+
+  assert.equal((await db.select().from(schema.snapshots)).length, 0);
+  assert.equal((await db.select().from(schema.versions)).length, 0);
+  assert.equal((await db.select().from(schema.comments)).length, 0);
+  // The user survives; only their authorship link is severed.
+  assert.equal((await db.select().from(schema.users)).length, 1);
+
+  await client.close();
+});
+
+test("email uniqueness is enforced", async () => {
+  const { db, client } = await freshDb();
+  await db.insert(schema.users).values({ email: "dup@waveform.com" });
+  // Drizzle wraps driver errors, so assert on the cause rather than the message.
+  await assert.rejects(
+    () => db.insert(schema.users).values({ email: "dup@waveform.com" }),
+    (error: unknown) => {
+      const cause = (error as { cause?: { message?: string } }).cause;
+      assert.match(String(cause?.message ?? error), /duplicate key|unique/i);
+      return true;
+    },
+  );
+  assert.equal((await db.select().from(schema.users)).length, 1);
+  await client.close();
+});

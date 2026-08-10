@@ -1,0 +1,50 @@
+{
+  "name": "copy-updater",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start -p ${PORT:-3000}",
+    "lint": "next lint",
+    "test": "tsx --test \"lib/**/*.test.ts\" \"db/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx scripts/migrate.ts",
+    "db:studio": "drizzle-kit studio"
+  },
+  "dependencies": {
+    "@openrouter/ai-sdk-provider": "^3.0.0",
+    "ai": "^7.0.51",
+    "clsx": "^2.1.1",
+    "diff": "^9.0.0",
+    "drizzle-orm": "^0.45.2",
+    "esbuild": "^0.25.12",
+    "jsdom": "^29.1.1",
+    "nanoid": "^5.1.7",
+    "next": "^16.3.0",
+    "next-auth": "^5.0.0-beta.32",
+    "pg": "^8.22.0",
+    "playwright": "^1.62.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "server-only": "^0.0.1",
+    "sharp": "^0.35.3",
+    "single-file-cli": "^2.0.83",
+    "tailwind-merge": "^3.6.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.4",
+    "@tailwindcss/postcss": "^4.3.3",
+    "@types/jsdom": "^27.0.0",
+    "@types/node": "^26.1.2",
+    "@types/pg": "^8.20.4",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "drizzle-kit": "^0.31.10",
+    "tailwindcss": "^4.3.3",
+    "tsx": "^4.23.5",
+    "typescript": "^5.9.3"
+  }
+}

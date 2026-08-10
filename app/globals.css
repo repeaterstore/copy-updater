@@ -1,0 +1,134 @@
+@import "tailwindcss";
+
+/*
+ * A dense review tool, not a marketing site: the palette is deliberately quiet
+ * so that diff colours (amber/green/red) are the only saturated things on
+ * screen and read instantly against the page preview.
+ */
+@theme {
+  --color-canvas: oklch(0.985 0.002 250);
+  --color-surface: oklch(1 0 0);
+  --color-sunken: oklch(0.965 0.003 250);
+  --color-line: oklch(0.9 0.004 250);
+  --color-line-strong: oklch(0.83 0.006 250);
+  --color-ink: oklch(0.22 0.01 250);
+  --color-ink-soft: oklch(0.48 0.012 250);
+  --color-ink-faint: oklch(0.62 0.01 250);
+  --color-accent: oklch(0.55 0.16 258);
+  --color-accent-soft: oklch(0.95 0.03 258);
+
+  --color-changed: oklch(0.72 0.15 75);
+  --color-changed-soft: oklch(0.96 0.05 75);
+  --color-added: oklch(0.62 0.15 150);
+  --color-added-soft: oklch(0.95 0.05 150);
+  --color-removed: oklch(0.6 0.18 25);
+  --color-removed-soft: oklch(0.96 0.04 25);
+  --color-moved: oklch(0.58 0.14 300);
+  --color-moved-soft: oklch(0.96 0.04 300);
+  /* Comments read as a separate axis from the change kinds, so teal rather
+     than another point on the amber/green/red scale. */
+  --color-comment: oklch(0.55 0.09 195);
+  --color-comment-soft: oklch(0.95 0.03 195);
+
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  @theme {
+    --color-canvas: oklch(0.19 0.008 260);
+    --color-surface: oklch(0.235 0.009 260);
+    --color-sunken: oklch(0.165 0.008 260);
+    --color-line: oklch(0.32 0.01 260);
+    --color-line-strong: oklch(0.42 0.012 260);
+    --color-ink: oklch(0.95 0.004 260);
+    --color-ink-soft: oklch(0.74 0.008 260);
+    --color-ink-faint: oklch(0.58 0.01 260);
+    --color-accent: oklch(0.7 0.14 258);
+    --color-accent-soft: oklch(0.3 0.06 258);
+
+    --color-changed-soft: oklch(0.32 0.06 75);
+    --color-added-soft: oklch(0.3 0.06 150);
+    --color-removed-soft: oklch(0.32 0.06 25);
+    --color-moved-soft: oklch(0.31 0.05 300);
+    --color-comment: oklch(0.72 0.1 195);
+    --color-comment-soft: oklch(0.3 0.05 195);
+  }
+}
+
+html,
+body {
+  height: 100%;
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Utility shorthands used across the workspace panes. */
+@layer components {
+  .panel {
+    background: var(--color-surface);
+    border: 1px solid var(--color-line);
+    border-radius: 0.625rem;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--color-line-strong);
+    background: var(--color-surface);
+    padding: 0.375rem 0.75rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--color-ink);
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+  .btn:hover:not(:disabled) {
+    background: var(--color-sunken);
+  }
+  .btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  .btn-primary {
+    background: var(--color-accent);
+    border-color: transparent;
+    color: white;
+  }
+  .btn-primary:hover:not(:disabled) {
+    filter: brightness(1.08);
+    background: var(--color-accent);
+  }
+
+  .field {
+    width: 100%;
+    border-radius: 0.5rem;
+    border: 1px solid var(--color-line-strong);
+    background: var(--color-surface);
+    color: var(--color-ink);
+    padding: 0.5rem 0.625rem;
+    font-size: 0.875rem;
+  }
+  .field:focus {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -1px;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    border-radius: 999px;
+    padding: 0.0625rem 0.5rem;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+  }
+}

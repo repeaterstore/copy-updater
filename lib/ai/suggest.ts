@@ -1,0 +1,460 @@
+/**
+ * The suggestion pipeline: build context, call the model with a schema, then
+ * validate what comes back against the request's scope before it is allowed
+ * anywhere near a version.
+ */
+import { generateObject, NoObjectGeneratedError, type ModelMessage } from "ai";
+import { z } from "zod";
+import { JSDOM } from "jsdom";
+import type { AiMode, ReasoningLevel } from "@/db/schema";
+import { assignNewIds } from "@/lib/ops/ids";
+import { sanitizeCss, sanitizeHtml } from "@/lib/ops/sanitize";
+import { OP_SCHEMA_BY_TYPE } from "@/lib/ops/schema";
+import type { Block, Op } from "@/lib/ops/types";
+import { buildModel, isParameterRoutingError, structuredOutputCulprit } from "./openrouter";
+import {
+  buildSystemPrompt,
+  buildUserPrompt,
+  neighboursFor,
+  type PromptShape,
+} from "./prompt";
+
+export interface SuggestOption {
+  label: string;
+  rationale: string;
+  ops: Op[];
+  /** Ops the model produced that were rejected, and why. */
+  rejected: { reason: string }[];
+}
+
+export interface SuggestInput {
+  modelId: string;
+  fallbackModels?: string[];
+  reasoningLevel: ReasoningLevel;
+  webSearch: boolean;
+  /** Generate each option in its own call, with a distinct angle assigned. */
+  distinctOptions: boolean;
+  mode: AiMode;
+  shape: PromptShape;
+  instructions: string | null;
+  optionCount: number;
+  pageUrl: string;
+  pageName: string;
+  brief: string | null;
+  allBlocks: Block[];
+  scopeBlockIds: string[];
+  scopeKind: "block" | "section" | "page";
+  sectionLabel?: string | null;
+  meta: Parameters<typeof buildUserPrompt>[0]["meta"];
+  cssIndex: Record<string, string[]>;
+  screenshot?: Buffer | null;
+}
+
+/**
+ * Temperature is set per prompt shape, not globally.
+ *
+ * Directives mode is asked to apply a specific list of changes faithfully, so
+ * sampling widely there produces drift from what was actually asked for.
+ * Optimize mode is asked to explore, and a low temperature there returns three
+ * near-identical rewordings.
+ */
+const TEMPERATURE_BY_SHAPE: Record<PromptShape, number> = {
+  directives: 0.25,
+  optimize: 0.85,
+};
+
+/**
+ * Angles assigned one per call when distinct options are requested.
+ *
+ * Asking a single call for three options reliably returns three rewordings of
+ * one idea — the model anchors on its first thought. Separate calls with an
+ * explicit, different angle each is what actually produces options worth
+ * choosing between. It costs N× as much, hence the toggle.
+ */
+const ANGLES = [
+  "Lead with the single clearest benefit, in the plainest possible language.",
+  "Lead with the objection or doubt a sceptical buyer arrives with, and answer it.",
+  "Lead with concrete specifics — numbers, names, outcomes — over adjectives.",
+  "Lead with the outcome the reader wants, written as the result they get.",
+  "Lead with what makes this different from the obvious alternative.",
+];
+
+/**
+ * Flat wire shape for an op, deliberately not a discriminated union.
+ *
+ * A union compiles to JSON Schema `oneOf`, and Anthropic's structured output
+ * rejects it outright — "Schema type 'oneOf' is not supported". Provider
+ * routing cannot save us there: the provider does support `response_format`,
+ * just not that construct. One object with a `t` discriminator and optional
+ * fields is understood everywhere.
+ *
+ * Being permissive on the wire costs nothing, because every op is parsed back
+ * into its strict per-type schema in validateOption before it can be applied.
+ */
+const COPY_OP_TYPES = ["setText", "setMeta"] as const;
+const LAYOUT_OP_TYPES = [
+  "setText", "setMeta", "insert", "remove", "move",
+  "replaceElement", "setAttr", "addStyle",
+] as const;
+
+/**
+ * Every field required, empty string meaning "not applicable", and only the
+ * fields the mode can actually use.
+ *
+ * Field count matters: providers compile a grammar for constrained decoding
+ * under a time limit, and carrying all twelve fields in both modes failed with
+ * "Grammar compilation timed out". Copy mode gets the four it needs.
+ *
+ * This shape is dictated by two providers pulling in opposite directions:
+ *
+ *  - OpenAI's strict structured output demands that `required` list every key
+ *    in `properties` — optional fields are rejected outright ("'required' is
+ *    required to be supplied and to be an array including every key").
+ *  - Anthropic rejects `oneOf`, which is what nullable unions compile to.
+ *
+ * Required-and-nullable satisfies the first and risks the second, so plain
+ * required strings with "" as the empty value is the only shape both accept.
+ * The emptiness is stripped in narrowOp before anything is validated.
+ */
+function flatOpSchema(mode: AiMode) {
+  const empty = ' Use "" when not applicable.';
+  const common = {
+    id: z.string().describe("Block id, for ops that target one." + empty),
+    html: z.string().describe("Replacement or inserted inline HTML." + empty),
+    title: z.string().describe("New meta title, for setMeta." + empty),
+    description: z.string().describe("New meta description, for setMeta." + empty),
+  };
+
+  if (mode === "copy") {
+    return z.object({ t: z.enum(COPY_OP_TYPES), ...common });
+  }
+
+  return z.object({
+    t: z.enum(LAYOUT_OP_TYPES),
+    ...common,
+    refId: z.string().describe("Reference block, for insert and move." + empty),
+    pos: z
+      .enum(["", "before", "after", "firstChild", "lastChild"])
+      .describe('Placement for insert and move. Use "" otherwise.'),
+    name: z.string().describe("Attribute name, for setAttr." + empty),
+    value: z.string().describe('Attribute value; "" removes it.'),
+    css: z.string().describe("CSS to append, for addStyle." + empty),
+  });
+}
+
+/**
+ * Anthropic's structured-output schema subset is narrower than JSON Schema:
+ * it rejects `oneOf` and it rejects `maxItems` on arrays. Counts are therefore
+ * asked for in the prompt and enforced after the fact rather than expressed in
+ * the schema.
+ */
+
+/**
+ * Superset of both mode shapes. Written by hand rather than inferred, because
+ * the per-mode schemas omit fields and narrowing would otherwise fail to
+ * compile for ops the mode does not allow.
+ */
+interface FlatOp {
+  t: string;
+  id?: string;
+  html?: string;
+  title?: string;
+  description?: string;
+  refId?: string;
+  pos?: string;
+  name?: string;
+  value?: string;
+  css?: string;
+}
+
+/** Parse a flat op back into a strict Op, or explain why it cannot be. */
+function narrowOp(flat: FlatOp): { op: Op } | { reason: string } {
+  const schema = OP_SCHEMA_BY_TYPE[flat.t as keyof typeof OP_SCHEMA_BY_TYPE];
+  if (!schema) return { reason: `unknown operation "${flat.t}"` };
+
+  // Drop the "" placeholders the wire format requires, so the strict schemas
+  // see genuinely absent fields.
+  const present = Object.fromEntries(
+    Object.entries(flat).filter(([, value]) => value !== "" && value !== undefined),
+  ) as FlatOp;
+
+  // setAttr distinguishes "no value" (remove the attribute) from absent.
+  const candidate =
+    flat.t === "setAttr" ? { ...present, value: present.value ?? null } : present;
+
+  const parsed = schema.safeParse(candidate);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    return { reason: `${flat.t} was missing ${issue?.path.join(".") || "a required field"}` };
+  }
+  return { op: parsed.data as Op };
+}
+
+function optionSchema(mode: AiMode, single: boolean) {
+  const opSchema = flatOpSchema(mode);
+
+  const option = z.object({
+    label: z.string().describe("Short name for this approach, 2-5 words"),
+    rationale: z
+      .string()
+      .describe("Why this version is better, and anything worth flagging"),
+    ops: z.array(opSchema),
+  });
+
+  // `single` is honoured by the prompt ("Return exactly one option") and by
+  // trimming below, not by a schema bound.
+  void single;
+  return z.object({ options: z.array(option) });
+}
+
+export async function generateSuggestions(
+  input: SuggestInput,
+): Promise<{ options: SuggestOption[]; modelId: string }> {
+  const scopeIds = new Set(input.scopeBlockIds);
+  const scope = input.allBlocks.filter((b) => scopeIds.has(b.id));
+  if (scope.length === 0 && input.shape !== "directives") {
+    throw new Error("Nothing in scope. Select some copy first.");
+  }
+
+  // Providers that turned out not to honour structured output for this account.
+  // Accumulated across retries so a second angle does not rediscover the same
+  // dead end.
+  const ignoreProviders: string[] = [];
+
+  const buildCurrentModel = () =>
+    buildModel({
+      modelId: input.modelId,
+      fallbackModels: input.fallbackModels,
+      reasoningLevel: input.reasoningLevel,
+      webSearch: input.webSearch,
+      ignoreProviders: [...ignoreProviders],
+    });
+
+  const system = buildSystemPrompt(input.mode);
+  const context = neighboursFor(input.allBlocks, scope);
+  const temperature = TEMPERATURE_BY_SHAPE[input.shape];
+
+  const promptFor = (angle: string | null) =>
+    buildUserPrompt({
+      pageUrl: input.pageUrl,
+      pageName: input.pageName,
+      brief: input.brief,
+      mode: input.mode,
+      shape: input.shape,
+      instructions: input.instructions,
+      optionCount: angle ? 1 : input.optionCount,
+      meta: input.meta,
+      scope,
+      context,
+      cssIndex: input.cssIndex,
+      angle,
+      webSearch: input.webSearch,
+      scopeKind: input.scopeKind,
+      sectionLabel: input.sectionLabel,
+    });
+
+  const run = async (angle: string | null): Promise<SuggestOption[]> => {
+    const schema = optionSchema(input.mode, angle !== null);
+
+    /*
+     * Degrade toward getting a valid answer rather than failing in front of a
+     * copywriter.
+     *
+     * `require_parameters: true` filters routing to providers that declare
+     * support for everything in the request, and temperature is part of that.
+     * On anthropic/claude-opus-5 the vendor's own endpoint does not declare it,
+     * so asking for a temperature narrows routing to Azure — which then refuses
+     * structured output at the workspace level.
+     *
+     * Dropping temperature is necessary but not sufficient: routing is load
+     * balanced, so a retry can land on the same bad provider again. Every
+     * failure therefore records the provider that refused, and each subsequent
+     * attempt excludes everything recorded so far.
+     */
+    const attempts: { temperature?: number }[] = [
+      { temperature },
+      {},
+      {},
+    ];
+
+    let result;
+    let lastError: unknown;
+    for (const [index, attempt] of attempts.entries()) {
+      try {
+        result = await generateObject({
+          model: await buildCurrentModel(),
+          schema,
+          system,
+          messages: buildMessages(promptFor(angle), input.screenshot),
+          ...(attempt.temperature !== undefined ? { temperature: attempt.temperature } : {}),
+        });
+        break;
+      } catch (error) {
+        lastError = error;
+        if (!isParameterRoutingError(error)) throw error;
+
+        // Record on every failure, not just the last — otherwise the exclusion
+        // is only known once there are no attempts left to use it.
+        const culprit = structuredOutputCulprit(error);
+        if (culprit && !ignoreProviders.includes(culprit)) ignoreProviders.push(culprit);
+
+        if (index === attempts.length - 1) throw error;
+      }
+    }
+    if (!result) throw lastError ?? new Error("No result generated.");
+    const produced = angle ? result.object.options.slice(0, 1) : result.object.options;
+    return produced.map((option) =>
+      validateOption(option as { label: string; rationale: string; ops: FlatOp[] }, scopeIds, input.mode),
+    );
+  };
+
+  if (!input.distinctOptions) {
+    return { modelId: input.modelId, options: await run(null) };
+  }
+
+  // One call per angle, in parallel. A failed angle drops out rather than
+  // failing the whole request — two good options beat an error.
+  const angles = ANGLES.slice(0, input.optionCount);
+  const settled = await Promise.allSettled(angles.map((angle) => run(angle)));
+  const options = settled.flatMap((result) =>
+    result.status === "fulfilled" ? result.value : [],
+  );
+
+  if (options.length === 0) {
+    const failure = settled.find((r) => r.status === "rejected");
+    throw failure && failure.status === "rejected"
+      ? failure.reason
+      : new Error("No options were generated.");
+  }
+
+  return { modelId: input.modelId, options };
+}
+
+function buildMessages(
+  prompt: string,
+  screenshot: Buffer | null | undefined,
+): ModelMessage[] {
+  if (!screenshot) {
+    return [{ role: "user", content: prompt }];
+  }
+  return [
+    {
+      role: "user",
+      content: [
+        { type: "text", text: prompt },
+        // A "file" part, not the deprecated "image" part, which v7 warns about.
+        { type: "file", mediaType: "image/png", data: new Uint8Array(screenshot) },
+      ],
+    },
+  ];
+}
+
+/**
+ * Enforce the request's boundaries on what came back.
+ *
+ * Models reference ids they were only shown as context, and occasionally invent
+ * them. Applying those would edit copy nobody asked to change, so they are
+ * dropped and reported rather than silently passed through.
+ */
+function validateOption(
+  option: { label: string; rationale: string; ops: FlatOp[] },
+  scopeIds: Set<string>,
+  mode: AiMode,
+): SuggestOption {
+  const dom = new JSDOM("<!doctype html><body></body>");
+  const doc = dom.window.document;
+
+  const ops: Op[] = [];
+  const rejected: { reason: string }[] = [];
+
+  for (const flat of option.ops) {
+    if (mode === "copy" && flat.t !== "setText" && flat.t !== "setMeta") {
+      rejected.push({ reason: `"${flat.t}" is not allowed in copy mode` });
+      continue;
+    }
+
+    const narrowed = narrowOp(flat);
+    if ("reason" in narrowed) {
+      rejected.push(narrowed);
+      continue;
+    }
+    const op = narrowed.op;
+
+    switch (op.t) {
+      case "setText": {
+        if (!scopeIds.has(op.id)) {
+          rejected.push({ reason: `${op.id} was not in scope` });
+          continue;
+        }
+        ops.push({ ...op, html: sanitizeHtml(doc, op.html) });
+        break;
+      }
+      case "setMeta":
+        ops.push(op);
+        break;
+      case "remove":
+      case "move":
+      case "setAttr":
+      case "replaceElement": {
+        if (!scopeIds.has(op.id)) {
+          rejected.push({ reason: `${op.id} was not in scope` });
+          continue;
+        }
+        ops.push(
+          op.t === "replaceElement"
+            ? { ...op, html: assignNewIds(doc, sanitizeHtml(doc, op.html)) }
+            : op,
+        );
+        break;
+      }
+      case "insert": {
+        if (!scopeIds.has(op.refId)) {
+          rejected.push({ reason: `${op.refId} was not in scope` });
+          continue;
+        }
+        // Ids are minted now, not at apply time, so replaying the op list is
+        // stable and comments stay attached to what they point at.
+        ops.push({ ...op, html: assignNewIds(doc, sanitizeHtml(doc, op.html)) });
+        break;
+      }
+      case "addStyle":
+        ops.push({ ...op, css: sanitizeCss(op.css) });
+        break;
+    }
+  }
+
+  dom.window.close();
+  return { label: option.label, rationale: option.rationale, ops, rejected };
+}
+
+export function describeAiError(error: unknown): string {
+  if (NoObjectGeneratedError.isInstance(error)) {
+    return "The model did not return a usable result. Try again, or lower the number of options.";
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  if (/401|unauthor|invalid.*api.?key|no auth/i.test(message)) {
+    return "OpenRouter rejected the API key. Check it in Settings.";
+  }
+  if (/402|credit|insufficient/i.test(message)) {
+    return "OpenRouter reports insufficient credit for this request.";
+  }
+  if (/429|rate.?limit/i.test(message)) {
+    return "Rate limited. Wait a moment and try again.";
+  }
+  if (/no (allowed )?providers|no endpoints/i.test(message)) {
+    return (
+      "No provider for that model supports structured output. " +
+      "Pick a different model in the suggest panel."
+    );
+  }
+  // Order matters: a size complaint also mentions "image", and telling someone
+  // their model lacks vision when the picture was simply too big sends them to
+  // change the wrong thing.
+  if (/exceeds|too large|maximum.*bytes|payload/i.test(message)) {
+    return "The page screenshot was too large for this model. Try a smaller scope.";
+  }
+  if (/image|vision|multimodal/i.test(message)) {
+    return "That model cannot accept the page screenshot. Pick a vision-capable model.";
+  }
+  return message;
+}
