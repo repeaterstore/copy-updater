@@ -49,9 +49,22 @@ export function OutlinePane({
   const [showHidden, setShowHidden] = useState(false);
   const [query, setQuery] = useState("");
 
-  const filtered = useMemo(() => {
+  /**
+   * Group the whole page, then filter what is shown — not the other way round.
+   *
+   * Grouping the filtered list looks equivalent and is not. Furniture is
+   * recognised by how little of a container was ever on screen, so hiding the
+   * hidden blocks first destroys the evidence: waveform.com's 224-block menu
+   * arrived as the nine items that are always visible, scored 100% visible, and
+   * came through as a page section called "Antennas & Routers" — a nav
+   * subtitle — while "Navigation & header" shrank to the four blocks that
+   * happen to sit in a literal <header> tag.
+   */
+  const sections = useMemo(() => groupIntoSections(blocks), [blocks]);
+
+  const matches = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return blocks.filter((d) => {
+    return (d: DerivedBlock) => {
       if (changedOnly && !d.changed) return false;
       if (commentedOnly && !commentCounts[d.block.id]) return false;
       // A commented block stays listed even when hidden: the comment is the
@@ -59,10 +72,8 @@ export function OutlinePane({
       if (!showHidden && !isVisible(d.block) && !commentCounts[d.block.id]) return false;
       if (needle && !d.text.toLowerCase().includes(needle)) return false;
       return true;
-    });
-  }, [blocks, changedOnly, commentedOnly, commentCounts, showHidden, query]);
-
-  const sections = useMemo(() => groupIntoSections(filtered), [filtered]);
+    };
+  }, [changedOnly, commentedOnly, commentCounts, showHidden, query]);
 
   /**
    * Sections start collapsed so the outline is a scannable list of headings
@@ -191,7 +202,7 @@ export function OutlinePane({
 
         {sections.map((section) => renderSection(section, 0))}
 
-        {sections.length === 0 ? (
+        {sections.every((s) => sectionBlocks(s).filter(matches).length === 0) ? (
           <p className="px-2 py-6 text-center text-xs text-[var(--color-ink-faint)]">
             Nothing matches.
           </p>
@@ -207,6 +218,12 @@ export function OutlinePane({
     const all = sectionBlocks(section);
     const changedHere = all.filter((d) => d.changed).length;
     const commentsHere = all.filter((d) => commentCounts[d.block.id]).length;
+
+    // A section the filters emptied is not shown at all — but it was still
+    // grouped, which is what kept the menu recognisable as furniture.
+    const shownHere = all.filter(matches);
+    if (shownHere.length === 0) return null;
+    const rows = section.blocks.filter(matches);
 
     return (
           <div
@@ -237,7 +254,7 @@ export function OutlinePane({
               >
                 <span className="truncate">{section.label}</span>
                 <span className="shrink-0 font-normal normal-case opacity-70">
-                  {all.length}
+                  {shownHere.length}
                 </span>
                 {!open && changedHere > 0 ? (
                   <span className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-changed)]" />
@@ -260,7 +277,7 @@ export function OutlinePane({
                 </button>
               ) : null}
             </div>
-            {open ? section.blocks.map((derived) => (
+            {open ? rows.map((derived) => (
               <button
                 key={derived.block.id}
                 type="button"

@@ -8,6 +8,7 @@ import {
   deriveBlocks,
   type DerivedBlock,
   groupIntoSections,
+  isVisible,
   sectionBlocks,
   sectionScopeFor,
 } from "./derive";
@@ -308,4 +309,24 @@ test("a band whose heading follows an eyebrow is not named twice", () => {
   assert.equal(sections[0].label, "Coverage that holds");
   // The heading names the band; it must not then open a child repeating it.
   assert.deepEqual(sections[0].children, []);
+});
+
+test("furniture detection needs the hidden blocks, so grouping comes before filtering", () => {
+  const derived = megaMenuBlocks();
+
+  const grouped = groupIntoSections(derived);
+  assert.ok(grouped.some((s) => s.chrome === "nav"), "the menu is furniture");
+
+  // The outline hides collapsed-menu rows by default. Doing that before
+  // grouping is the trap: the menu arrives as only its always-visible items,
+  // scores as fully visible, and comes through as a page section. On
+  // waveform.com that turned a 224-block menu into a band called "Antennas &
+  // Routers" and left "Navigation & header" with the four blocks that happen
+  // to sit in a literal <header>.
+  const visibleFirst = groupIntoSections(derived.filter((d) => isVisible(d.block)));
+  assert.equal(
+    visibleFirst.some((s) => s.chrome === "nav"),
+    false,
+    "filtering first loses the evidence — OutlinePane must group the full list",
+  );
 });
