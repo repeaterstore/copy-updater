@@ -63,6 +63,8 @@ export function AiPanel({
   const [webSearch, setWebSearch] = useState(false);
   const [allModels, setAllModels] = useState(false);
   const [options, setOptions] = useState<SuggestOption[] | null>(null);
+  /** Models that failed while others succeeded — worth naming, not worth failing for. */
+  const [modelErrors, setModelErrors] = useState<string[]>([]);
   const [runId, setRunId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -111,6 +113,7 @@ export function AiPanel({
   const run = () => {
     setError(null);
     setOptions(null);
+    setModelErrors([]);
     const controller = new AbortController();
     inFlight.current = controller;
 
@@ -136,11 +139,40 @@ export function AiPanel({
             customBrandVoice: voiceId === VOICE_CUSTOM ? customVoice.trim() || null : null,
           }),
         });
-        const result = await response.json();
-        if (result.error) setError(result.error);
-        else {
-          setOptions(result.options);
-          setRunId(result.runId);
+        /*
+         * Newline-delimited JSON, read as it arrives.
+         *
+         * Each completed option is its own line, so the first suggestion is on
+         * screen while the rest are still being written — and with several
+         * models asked, a fast model's answers do not wait behind a slow one's.
+         */
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error("The response could not be read.");
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+
+          // The last piece may be a partial line; leave it for the next chunk.
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const frame = JSON.parse(line);
+            if (frame.type === "option") {
+              setOptions((current) => [...(current ?? []), frame.option]);
+            } else if (frame.type === "modelFailed") {
+              setModelErrors((current) => [...current, `${frame.model}: ${frame.message}`]);
+            } else if (frame.type === "done") {
+              setRunId(frame.runId);
+            } else if (frame.type === "error") {
+              setError(frame.message);
+            }
+          }
         }
       } catch (error) {
         // Aborting is a choice the reviewer just made, not news to report.
@@ -357,11 +389,25 @@ export function AiPanel({
             {error}
           </p>
         ) : null}
+
+        {/* A model that failed while others answered. Named rather than
+            swallowed: a model quietly returning nothing every time looks like
+            it is working until someone counts the options. */}
+        {modelErrors.map((message) => (
+          <p
+            key={message}
+            className="rounded-md bg-[var(--color-changed-soft)] px-2 py-1.5 text-[11px] text-[var(--color-ink-soft)]"
+          >
+            {message}
+          </p>
+        ))}
       </div>
 
       {options ? (
         <div className="mt-3 space-y-2">
-          {options.length === 0 ? (
+          {/* Only once the stream has ended. Mid-request the list is empty
+              because nothing has landed yet, not because nothing will. */}
+          {options.length === 0 && !pending ? (
             <p className="text-xs text-[var(--color-ink-faint)]">
               The model returned no usable changes.
             </p>
@@ -408,6 +454,12 @@ export function AiPanel({
               </p>
             </article>
           ))}
+
+          {pending ? (
+            <p className="text-[11px] text-[var(--color-ink-faint)]">
+              {options.length > 0 ? "Still writing…" : "Thinking…"}
+            </p>
+          ) : null}
         </div>
       ) : null}
     </section>

@@ -41,6 +41,17 @@ export interface SuggestInput {
   models: string[];
   /** Aborts the in-flight provider calls when the reviewer stops waiting. */
   abortSignal?: AbortSignal;
+  /**
+   * Called for each option the moment it is complete.
+   *
+   * A request for three options takes as long as writing three; asking four
+   * models takes as long as the slowest. Neither wait is necessary to start
+   * reading — an option is useful the instant it exists, and the rest can
+   * arrive underneath it.
+   */
+  onOption?: (modelId: string, option: SuggestOption) => void;
+  /** Called when a model fails, so the panel can say which and carry on. */
+  onModelFailed?: (modelId: string, message: string) => void;
   mode: AiMode;
   shape: PromptShape;
   instructions: string | null;
@@ -182,21 +193,20 @@ function narrowOp(flat: FlatOp): { op: Op } | { reason: string } {
   return { op: parsed.data as Op };
 }
 
-function optionSchema(mode: AiMode, single: boolean) {
-  const opSchema = flatOpSchema(mode);
-
-  const option = z.object({
+/**
+ * The schema for one option.
+ *
+ * How many to return is set by the prompt, not a schema bound: Anthropic's
+ * structured output rejects maxItems.
+ */
+function optionSchema(mode: AiMode) {
+  return z.object({
     label: z.string().describe("Short name for this approach, 2-5 words"),
     rationale: z
       .string()
       .describe("Why this version is better, and anything worth flagging"),
-    ops: z.array(opSchema),
+    ops: z.array(flatOpSchema(mode)),
   });
-
-  // `single` is honoured by the prompt ("Return exactly one option") and by
-  // trimming below, not by a schema bound.
-  void single;
-  return z.object({ options: z.array(option) });
 }
 
 export async function generateSuggestions(
@@ -254,7 +264,7 @@ export async function generateSuggestions(
     });
 
   const run = async (modelId: string): Promise<SuggestOption[]> => {
-    const schema = optionSchema(input.mode, false);
+    const schema = optionSchema(input.mode);
 
     /*
      * Degrade toward getting a valid answer rather than failing in front of a
@@ -283,7 +293,7 @@ export async function generateSuggestions(
       try {
         result = await generateObject({
           model: await buildCurrentModel(modelId),
-          schema,
+          schema: z.object({ options: z.array(schema) }),
           system,
           messages: buildMessages(prompt, input.screenshot),
           abortSignal: input.abortSignal,
@@ -306,14 +316,30 @@ export async function generateSuggestions(
       }
     }
     if (!result) throw lastError ?? new Error("No result generated.");
-    return result.object.options.map((option) =>
-      validateOption(
+
+    /*
+     * Handed over one at a time, even though they arrived together.
+     *
+     * Streaming the model's own output element by element is the version worth
+     * having and is not what this is: `streamObject` with an array output hung
+     * against this schema — no options, no error — where a trivial schema
+     * streamed fine, so something in the op shape or the provider routing does
+     * not survive it. Until that is understood, a hang in the one path every
+     * suggestion goes through is a far worse trade than waiting for the call.
+     * Emitting here keeps the wire format and the panel ready for it, and is
+     * what makes several models arrive one after another rather than together.
+     */
+    return result.object.options.map((option) => {
+      const validated = validateOption(
         option as { label: string; rationale: string; ops: FlatOp[] },
         scopeIds,
         input.mode,
         input.scopeKind,
-      ),
-    );
+      );
+      const tagged = input.allModels ? { ...validated, model: modelId } : validated;
+      input.onOption?.(modelId, tagged);
+      return tagged;
+    });
   };
 
   if (!input.allModels) {
@@ -332,7 +358,13 @@ export async function generateSuggestions(
   const models = input.models.length > 0 ? input.models : [input.modelId];
   const settled = await Promise.allSettled(
     models.map((modelId) =>
-      run(modelId).then((options) => options.map((option) => ({ ...option, model: modelId }))),
+      run(modelId).then(
+        (produced) => produced,
+        (error) => {
+          input.onModelFailed?.(modelId, describeAiError(error));
+          throw error;
+        },
+      ),
     ),
   );
   const options = settled.flatMap((result) =>
