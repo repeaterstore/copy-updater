@@ -211,7 +211,7 @@ export async function generateSuggestions(
   }
 
   // Providers that turned out not to honour structured output for this account.
-  // Accumulated across retries so a second angle does not rediscover the same
+  // Accumulated across retries so a later attempt does not rediscover the same
   // dead end.
   const ignoreProviders: string[] = [];
 
@@ -248,7 +248,6 @@ export async function generateSuggestions(
       scope,
       context,
       cssIndex: input.cssIndex,
-      angle: null,
       webSearch: input.webSearch,
       scopeKind: input.scopeKind,
       sectionLabel: input.sectionLabel,

@@ -25,8 +25,6 @@ export interface SuggestContext {
   cssIndex: Record<string, string[]>;
   /** Section markup, layout mode only. */
   sectionHtml?: string | null;
-  /** When set, this call produces one option from this specific angle. */
-  angle?: string | null;
   /** Whether the model may search the web on this request. */
   webSearch?: boolean;
   /** What the scope represents, which changes what a good answer looks like. */
@@ -203,15 +201,32 @@ export function buildUserPrompt(context: SuggestContext): string {
     );
   }
 
-  if (context.angle) {
-    sections.push(
-      `ANGLE FOR THIS VERSION: ${context.angle}\n\n` +
-        `Commit to it. A version that hedges between angles is worse than one that ` +
-        `takes this one seriously. Return exactly one option.`,
-    );
+  if (context.optionCount === 1) {
+    sections.push(`Return exactly one option.`);
   } else {
+    /*
+     * Asking for N options and leaving it there returns N phrasings of one
+     * idea: the model settles on an approach in its first sentence and spends
+     * the rest of the call rewording it. Naming the levers it can pull — and
+     * saying plainly that interchangeable options do not count — is what makes
+     * the difference between three options and one option written three times.
+     *
+     * The levers are named, the choices are not. Prescribing the actual angles
+     * is what the old hard-coded list did, and it produced copy that read like
+     * it was answering a brief rather than selling the page.
+     */
     sections.push(
-      `Return exactly ${context.optionCount} distinct option${context.optionCount === 1 ? "" : "s"}.`,
+      `Return exactly ${context.optionCount} options, and make them genuinely ` +
+        `different attempts rather than one idea reworded.\n` +
+        `Change the approach between them, not just the wording. Things worth ` +
+        `varying: what the opening leads with; whether it leads with the ` +
+        `benefit, the problem, the proof or the offer; how specific versus how ` +
+        `broad; which objection it answers; how long it is; how much it assumes ` +
+        `the reader already knows.\n` +
+        `Two options a reader could swap without noticing are one option. If ` +
+        `you find yourself writing a third that is close to the first, take a ` +
+        `real risk with it instead — a version worth rejecting is more useful ` +
+        `than a safe near-duplicate.`,
     );
   }
 

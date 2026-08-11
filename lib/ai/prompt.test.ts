@@ -46,7 +46,6 @@ function metaPrompt(blocks: Block[]): string {
     scope: [],
     context: pageSummaryFor(blocks),
     cssIndex: {},
-    angle: null,
     webSearch: false,
     scopeKind: "meta",
     sectionLabel: null,
@@ -131,7 +130,6 @@ test("brand voice and page brief are separate sections, voice first", () => {
     scope: blocks.slice(0, 1),
     context: [],
     cssIndex: {},
-    angle: null,
     webSearch: false,
     scopeKind: "block",
     sectionLabel: null,
@@ -160,11 +158,45 @@ test("no brand voice means no brand voice section", () => {
     scope: blocks.slice(0, 1),
     context: [],
     cssIndex: {},
-    angle: null,
     webSearch: false,
     scopeKind: "block",
     sectionLabel: null,
   });
 
   assert.doesNotMatch(prompt, /BRAND VOICE/);
+});
+
+test("asking for several options says how to make them differ", () => {
+  const blocks = blocksOf();
+  const base = {
+    pageUrl: "https://www.waveform.com/",
+    pageName: "Waveform home",
+    brief: null,
+    brandVoice: null,
+    mode: "copy" as const,
+    shape: "optimize" as const,
+    instructions: null,
+    meta: META,
+    scope: blocks.slice(0, 1),
+    context: [],
+    cssIndex: {},
+    webSearch: false,
+    scopeKind: "block" as const,
+    sectionLabel: null,
+  };
+
+  const many = buildUserPrompt({ ...base, optionCount: 3 });
+  // Left at "return 3 distinct options", a model returns one idea reworded
+  // three times. The levers it can pull have to be named.
+  assert.match(many, /Return exactly 3 options/);
+  assert.match(many, /genuinely different attempts/);
+  assert.match(many, /swap without noticing are one option/);
+
+  // The levers are named; the actual angles are not — prescribing those is what
+  // the old hard-coded list did.
+  assert.doesNotMatch(many, /Lead with the single clearest benefit/);
+
+  const one = buildUserPrompt({ ...base, optionCount: 1 });
+  assert.match(one, /Return exactly one option\./);
+  assert.doesNotMatch(one, /genuinely different attempts/);
 });

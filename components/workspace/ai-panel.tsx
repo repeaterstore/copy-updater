@@ -317,6 +317,13 @@ export function AiPanel({
                 </option>
               ))}
             </select>
+            {/* Per model, not in total — worth spelling out, since four models
+                at three options each is twelve suggestions to read. */}
+            {allModels && config.models.length > 1 ? (
+              <span className="text-[var(--color-ink-faint)]">
+                each × {config.models.length} = {optionCount * config.models.length}
+              </span>
+            ) : null}
           </label>
           {pending ? (
             <button
