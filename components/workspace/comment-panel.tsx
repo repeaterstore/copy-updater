@@ -13,6 +13,19 @@ export interface CommentItem {
   author: string;
 }
 
+/** "just now" / "5m ago" / "3h ago" / "2d ago" / a date beyond a week. */
+function timeAgo(iso: string): string {
+  const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (seconds < 60) return "just now";
+  const minutes = seconds / 60;
+  if (minutes < 60) return `${Math.floor(minutes)}m ago`;
+  const hours = minutes / 60;
+  if (hours < 24) return `${Math.floor(hours)}h ago`;
+  const days = hours / 24;
+  if (days < 7) return `${Math.floor(days)}d ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
 export function CommentPanel({
   versionId,
   blockId,
@@ -46,7 +59,15 @@ export function CommentPanel({
               }`}
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="font-medium">{comment.author}</span>
+                <span className="min-w-0">
+                  <span className="font-medium">{comment.author}</span>
+                  <span
+                    className="ml-1.5 text-[10px] text-[var(--color-ink-faint)]"
+                    title={new Date(comment.createdAt).toLocaleString()}
+                  >
+                    {timeAgo(comment.createdAt)}
+                  </span>
+                </span>
                 <button
                   type="button"
                   className="text-[10px] text-[var(--color-ink-soft)] hover:text-[var(--color-ink)]"

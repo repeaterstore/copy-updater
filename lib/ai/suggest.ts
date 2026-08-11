@@ -43,7 +43,7 @@ export interface SuggestInput {
   brief: string | null;
   allBlocks: Block[];
   scopeBlockIds: string[];
-  scopeKind: "block" | "section" | "page";
+  scopeKind: "block" | "section" | "page" | "meta";
   sectionLabel?: string | null;
   meta: Parameters<typeof buildUserPrompt>[0]["meta"];
   cssIndex: Record<string, string[]>;
@@ -212,7 +212,9 @@ export async function generateSuggestions(
 ): Promise<{ options: SuggestOption[]; modelId: string }> {
   const scopeIds = new Set(input.scopeBlockIds);
   const scope = input.allBlocks.filter((b) => scopeIds.has(b.id));
-  if (scope.length === 0 && input.shape !== "directives") {
+  // A meta scope is legitimately empty of blocks: the meta fields are the
+  // subject, and validation confines the answer to setMeta ops.
+  if (scope.length === 0 && input.shape !== "directives" && input.scopeKind !== "meta") {
     throw new Error("Nothing in scope. Select some copy first.");
   }
 

@@ -40,7 +40,7 @@ export async function suggestAction(input: {
   instructions: string | null;
   optionCount: number;
   scopeBlockIds: string[];
-  scopeKind: "block" | "section" | "page";
+  scopeKind: "block" | "section" | "page" | "meta";
   sectionLabel?: string | null;
   webSearch: boolean;
   distinctOptions: boolean;

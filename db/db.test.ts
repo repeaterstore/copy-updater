@@ -170,3 +170,39 @@ test("email uniqueness is enforced", async () => {
   assert.equal((await db.select().from(schema.users)).length, 1);
   await client.close();
 });
+
+test("home listing counts versions and reports the latest snapshot status", async () => {
+  const { db, client } = await freshDb();
+  const { listPagesWithStats } = await import("../lib/pages");
+
+  const [user] = await db.insert(schema.users)
+    .values({ email: "sina@rsrf.com" }).returning();
+  const [withVersions] = await db.insert(schema.pages)
+    .values({ url: "https://example.com/a", name: "A", createdBy: user.id }).returning();
+  const [empty] = await db.insert(schema.pages)
+    .values({ url: "https://example.com/b", name: "B", createdBy: user.id }).returning();
+
+  const [snapshot] = await db.insert(schema.snapshots)
+    .values({ pageId: withVersions.id, status: "ready" }).returning();
+  for (const label of ["v1", "v2", "v3"]) {
+    await db.insert(schema.versions)
+      .values({ pageId: withVersions.id, snapshotId: snapshot.id, label });
+  }
+  // An older failed capture followed by a ready one: the latest wins.
+  await db.insert(schema.snapshots)
+    .values({ pageId: empty.id, status: "failed", capturedAt: new Date("2026-01-01") });
+  await db.insert(schema.snapshots)
+    .values({ pageId: empty.id, status: "pending", capturedAt: new Date("2026-02-01") });
+
+  // PGlite speaks real Postgres; the cast is only for the driver type.
+  const rows = await listPagesWithStats(db as never);
+  const a = rows.find((r) => r.id === withVersions.id);
+  const b = rows.find((r) => r.id === empty.id);
+
+  assert.equal(a?.versionCount, 3);
+  assert.equal(a?.snapshotStatus, "ready");
+  assert.equal(b?.versionCount, 0);
+  assert.equal(b?.snapshotStatus, "pending");
+
+  await client.close();
+});

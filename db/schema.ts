@@ -106,7 +106,7 @@ export const comments = pgTable(
     versionId: uuid("version_id")
       .notNull()
       .references(() => versions.id, { onDelete: "cascade" }),
-    /** Null for a comment on the version as a whole. */
+    /** Null for a comment on the meta fields (inspector with nothing selected). */
     blockId: text("block_id"),
     authorId: uuid("author_id").references(() => users.id, { onDelete: "set null" }),
     body: text("body").notNull(),

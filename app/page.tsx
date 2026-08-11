@@ -1,6 +1,6 @@
 import Link from "next/link";
-import { desc, eq, sql } from "drizzle-orm";
-import { db, schema } from "@/db";
+import { db } from "@/db";
+import { listPagesWithStats } from "@/lib/pages";
 import { requireUser } from "@/lib/session";
 import { AppHeader } from "@/components/app-header";
 
@@ -8,26 +8,7 @@ export const dynamic = "force-dynamic";
 
 export default async function HomePage() {
   const user = await requireUser();
-
-  const rows = await db
-    .select({
-      id: schema.pages.id,
-      name: schema.pages.name,
-      url: schema.pages.url,
-      createdAt: schema.pages.createdAt,
-      versionCount: sql<number>`(
-        select count(*) from ${schema.versions} where ${schema.versions.pageId} = ${schema.pages.id}
-      )`,
-      snapshotStatus: sql<string | null>`(
-        select status from ${schema.snapshots}
-        where ${schema.snapshots.pageId} = ${schema.pages.id}
-        order by captured_at desc limit 1
-      )`,
-    })
-    .from(schema.pages)
-    .orderBy(desc(schema.pages.createdAt));
-
-  void eq;
+  const rows = await listPagesWithStats(db);
 
   return (
     <div className="min-h-screen">

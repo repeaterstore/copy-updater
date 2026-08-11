@@ -2,9 +2,13 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { desc, eq } from "drizzle-orm";
 import { db, schema } from "@/db";
+import { deletePageAction } from "@/app/actions/pages";
+import { deleteVersionAction } from "@/app/actions/versions";
 import { AppHeader } from "@/components/app-header";
 import { CaptureStatus } from "@/components/capture-status";
+import { ConfirmDeleteButton } from "@/components/confirm-delete-button";
 import { NewVersionButton } from "@/components/new-version-button";
+import { PageBriefEditor } from "@/components/page-brief";
 import { reapStaleCaptures } from "@/lib/capture/jobs";
 import { requireUser } from "@/lib/session";
 import { orderByLineage } from "@/lib/version-tree";
@@ -90,6 +94,15 @@ export default async function PageDetail({
           ) : null}
         </div>
 
+        <div className="mt-2">
+          <ConfirmDeleteButton
+            label="Delete page"
+            quiet
+            confirmText={`Delete this page, its snapshots and all ${versions.length} version${versions.length === 1 ? "" : "s"}? This cannot be undone.`}
+            onConfirm={deletePageAction.bind(null, page.id)}
+          />
+        </div>
+
         <CaptureStatus
           pageId={page.id}
           status={latest?.status ?? "pending"}
@@ -120,29 +133,36 @@ export default async function PageDetail({
                   versions.map((v) => ({ ...v, createdAt: v.createdAt.toISOString() })),
                 ).map(({ version, depth, parent }) => (
                   <li key={version.id} style={{ marginLeft: depth * 24 }}>
-                    <Link
-                      href={`/pages/${page.id}/v/${version.id}`}
-                      className="panel flex items-center gap-3 px-4 py-3 transition-colors hover:border-[var(--color-line-strong)]"
-                    >
-                      {depth > 0 ? (
-                        <span className="shrink-0 text-xs text-[var(--color-ink-faint)]">↳</span>
-                      ) : null}
-                      <span className={`chip ${STATUS_STYLE[version.status]}`}>
-                        {version.status}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm font-medium">
-                          {version.label}
+                    <div className="panel flex items-center gap-3 px-4 py-3 transition-colors hover:border-[var(--color-line-strong)]">
+                      <Link
+                        href={`/pages/${page.id}/v/${version.id}`}
+                        className="flex min-w-0 flex-1 items-center gap-3"
+                      >
+                        {depth > 0 ? (
+                          <span className="shrink-0 text-xs text-[var(--color-ink-faint)]">↳</span>
+                        ) : null}
+                        <span className={`chip ${STATUS_STYLE[version.status]}`}>
+                          {version.status}
                         </span>
-                        <span className="block truncate text-[11px] text-[var(--color-ink-faint)]">
-                          compared against {parent ? parent.label : "the live page"}
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium">
+                            {version.label}
+                          </span>
+                          <span className="block truncate text-[11px] text-[var(--color-ink-faint)]">
+                            compared against {parent ? parent.label : "the live page"}
+                          </span>
                         </span>
-                      </span>
-                      <span className="shrink-0 text-xs text-[var(--color-ink-faint)]">
-                        {version.authorName ?? version.authorEmail ?? "unknown"} ·{" "}
-                        {new Date(version.createdAt).toLocaleDateString()}
-                      </span>
-                    </Link>
+                        <span className="shrink-0 text-xs text-[var(--color-ink-faint)]">
+                          {version.authorName ?? version.authorEmail ?? "unknown"} ·{" "}
+                          {new Date(version.createdAt).toLocaleDateString()}
+                        </span>
+                      </Link>
+                      <ConfirmDeleteButton
+                        quiet
+                        confirmText={`Delete "${version.label}"?`}
+                        onConfirm={deleteVersionAction.bind(null, version.id)}
+                      />
+                    </div>
                   </li>
                 ))}
               </ul>
@@ -150,14 +170,10 @@ export default async function PageDetail({
           </section>
         ) : null}
 
-        {page.brief ? (
-          <section className="mt-8">
-            <h2 className="text-sm font-semibold">Brief</h2>
-            <p className="panel mt-2 whitespace-pre-wrap p-4 text-sm text-[var(--color-ink-soft)]">
-              {page.brief}
-            </p>
-          </section>
-        ) : null}
+        <section className="mt-8">
+          <h2 className="text-sm font-semibold">Brief</h2>
+          <PageBriefEditor pageId={page.id} brief={page.brief} />
+        </section>
       </main>
     </div>
   );

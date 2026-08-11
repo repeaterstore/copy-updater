@@ -13,6 +13,7 @@ import {
 } from "@/lib/workspace/derive";
 import {
   createVersionAction,
+  renameVersionAction,
   saveOpsAction,
   setVersionStatusAction,
 } from "@/app/actions/versions";
@@ -274,6 +275,27 @@ export function Workspace({
     return () => window.removeEventListener("beforeunload", handler);
   }, [dirty]);
 
+  /**
+   * Autosave, two seconds after the last change.
+   *
+   * Two deliberate exclusions:
+   *  - Someone else's version. Saving there rewrites their proposal, which is
+   *    what the fork prompt exists to prevent — it must stay a deliberate act.
+   *  - After a failed save of the same op list, so a server-side rejection
+   *    does not retry every two seconds forever.
+   */
+  const lastAutosaveAttempt = useRef<string | null>(null);
+  useEffect(() => {
+    if (!dirty || readOnly || isSaving || !version.isMine) return;
+    const key = JSON.stringify(ops);
+    if (lastAutosaveAttempt.current === key) return;
+    const timer = setTimeout(() => {
+      lastAutosaveAttempt.current = key;
+      save();
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, [dirty, ops, readOnly, isSaving, version.isMine, save]);
+
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "s") {
@@ -518,8 +540,60 @@ function ForkPrompt({
   );
 }
 
-function Toolbar({
-  version,
+/**
+ * Click-to-rename for the version label. Names like "Test 2" are only wrong
+ * when you are staring at them, so the rename lives in the toolbar rather
+ * than back on the page listing.
+ */
+function EditableLabel({ versionId, label }: { versionId: string; label: string }) {
+  const router = useRouter();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(label);
+  const [pending, start] = useTransition();
+
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        title="Rename this version"
+        onClick={() => {
+          setDraft(label);
+          setEditing(true);
+        }}
+        className="rounded text-sm font-medium hover:bg-[var(--color-sunken)]"
+      >
+        {label}
+      </button>
+    );
+  }
+
+  const commit = () => {
+    const next = draft.trim();
+    setEditing(false);
+    if (!next || next === label) return;
+    start(async () => {
+      await renameVersionAction(versionId, next);
+      router.refresh();
+    });
+  };
+
+  return (
+    <input
+      autoFocus
+      disabled={pending}
+      className="field w-56 py-0.5 text-sm"
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") setEditing(false);
+        if (e.key === "Enter") e.currentTarget.blur();
+      }}
+      onBlur={commit}
+    />
+  );
+}
+
+function Toolbar({  version,
   versions,
   lineage,
   parentLabel,
@@ -561,7 +635,7 @@ function Toolbar({
 
   return (
     <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-line)] bg-[var(--color-surface)] px-4 py-2">
-      <span className="text-sm font-medium">{version.label}</span>
+      <EditableLabel versionId={version.id} label={version.label} />
       <span
         className={`chip ${
           version.status === "approved"
@@ -653,6 +727,7 @@ function Toolbar({
               className="btn"
               disabled={!dirty || isSaving}
               onClick={onSave}
+              title="Changes autosave a couple of seconds after you stop editing — this saves now (⌘S)"
             >
               {isSaving ? "Saving…" : dirty ? "Save" : "Saved"}
             </button>

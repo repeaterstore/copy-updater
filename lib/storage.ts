@@ -5,7 +5,7 @@
  * remounted or swapped for object storage without a migration.
  */
 import { createReadStream } from "node:fs";
-import { mkdir, readFile, writeFile, unlink, stat } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile, unlink, stat } from "node:fs/promises";
 import path from "node:path";
 import { env } from "./env";
 
@@ -56,6 +56,11 @@ export async function deleteDataFile(relativePath: string): Promise<void> {
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
+}
+
+/** Remove a whole directory under DATA_DIR (e.g. a snapshot's folder). */
+export async function deleteDataDir(relativePath: string): Promise<void> {
+  await rm(resolveDataPath(relativePath), { recursive: true, force: true });
 }
 
 export const snapshotPaths = {

@@ -76,6 +76,11 @@ export function AiPanel({
           ? [selectedBlockId]
           : [];
 
+  // "Block" scope with nothing selected means the meta fields are showing in
+  // the inspector — a meta-only request. setMeta is all it may produce, which
+  // the server enforces; here we just have to let the button be clickable.
+  const metaScope = scope === "block" && !selectedBlockId;
+
   const run = () => {
     setError(null);
     setOptions(null);
@@ -88,7 +93,7 @@ export function AiPanel({
         instructions: instructions.trim() || null,
         optionCount,
         scopeBlockIds: scopeIds,
-        scopeKind: scope,
+        scopeKind: metaScope ? "meta" : scope,
         sectionLabel: scope === "section" ? (section?.label ?? null) : null,
         webSearch,
         distinctOptions,
@@ -221,16 +226,16 @@ export function AiPanel({
           <button
             type="button"
             className="btn btn-primary ml-auto"
-            disabled={pending || readOnly || scopeIds.length === 0}
+            disabled={pending || readOnly || (!metaScope && scopeIds.length === 0)}
             onClick={run}
           >
             {pending ? "Thinking…" : "Suggest"}
           </button>
         </div>
 
-        {scopeIds.length === 0 && scope === "block" && !selectedBlockId ? (
+        {metaScope ? (
           <p className="text-[11px] text-[var(--color-ink-faint)]">
-            Select a block, or switch to page scope.
+            Rewrites only the meta title and description — the fields above.
           </p>
         ) : null}
 

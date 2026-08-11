@@ -6,6 +6,7 @@ import { eq } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { startCapture } from "@/lib/capture/jobs";
 import { requireUser } from "@/lib/session";
+import { deleteDataDir } from "@/lib/storage";
 
 function normalizeUrl(raw: string): string {
   const trimmed = raw.trim();
@@ -81,4 +82,22 @@ export async function updatePageBriefAction(
     .set({ brief: brief.trim() || null })
     .where(eq(schema.pages.id, pageId));
   revalidatePath(`/pages/${pageId}`);
+}
+
+export async function deletePageAction(pageId: string): Promise<void> {
+  await requireUser();
+
+  // Snapshots' files are collected before the row delete, since the cascade
+  // removes the rows that name them. DB first: an orphaned file costs disk,
+  // an orphaned row pointing at a missing file breaks the workspace.
+  const snapshots = await db.query.snapshots.findMany({
+    where: eq(schema.snapshots.pageId, pageId),
+  });
+  await db.delete(schema.pages).where(eq(schema.pages.id, pageId));
+  for (const snapshot of snapshots) {
+    await deleteDataDir(`snapshots/${snapshot.id}`).catch(() => undefined);
+  }
+
+  revalidatePath("/");
+  redirect("/");
 }

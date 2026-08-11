@@ -28,7 +28,7 @@ export interface SuggestContext {
   /** Whether the model may search the web on this request. */
   webSearch?: boolean;
   /** What the scope represents, which changes what a good answer looks like. */
-  scopeKind?: "block" | "section" | "page";
+  scopeKind?: "block" | "section" | "page" | "meta";
   /** Heading the section sits under, when scopeKind is "section". */
   sectionLabel?: string | null;
 }
@@ -101,17 +101,28 @@ export function buildUserPrompt(context: SuggestContext): string {
       `  description: ${JSON.stringify(context.meta.description)}`,
   );
 
-  const scopeHeading =
-    context.scopeKind === "section"
-      ? `EDITABLE BLOCKS — one section${context.sectionLabel ? ` ("${context.sectionLabel}")` : ""}, ${context.scope.length} blocks, in the order they appear:`
-      : `EDITABLE BLOCKS (${context.scope.length}) — you may only change these:`;
+  if (context.scopeKind === "meta") {
+    // A meta-only request has no editable blocks at all; the fields above are
+    // the whole canvas. Without saying so, the model casts about for blocks to
+    // rewrite and comes back with out-of-scope setText ops that get discarded.
+    sections.push(
+      `This request covers ONLY the meta fields shown above. Emit only setMeta ` +
+        `ops — title, description, og:title and og:description as appropriate. ` +
+        `Do not emit setText or any structural operation.`,
+    );
+  } else {
+    const scopeHeading =
+      context.scopeKind === "section"
+        ? `EDITABLE BLOCKS — one section${context.sectionLabel ? ` ("${context.sectionLabel}")` : ""}, ${context.scope.length} blocks, in the order they appear:`
+        : `EDITABLE BLOCKS (${context.scope.length}) — you may only change these:`;
 
-  sections.push(
-    `${scopeHeading}\n` +
-      context.scope
-        .map((b) => describeBlock(b, context.cssIndex[b.id]))
-        .join("\n"),
-  );
+    sections.push(
+      `${scopeHeading}\n` +
+        context.scope
+          .map((b) => describeBlock(b, context.cssIndex[b.id]))
+          .join("\n"),
+    );
+  }
 
   if (context.scopeKind === "section" && context.scope.length > 1) {
     // Without this, a multi-block request comes back as N independent rewrites
@@ -156,9 +167,13 @@ export function buildUserPrompt(context: SuggestContext): string {
         `hangs together — and mention what you adjusted in your rationale.`,
     );
   } else {
+    const task =
+      context.scopeKind === "meta"
+        ? `TASK: Improve the meta title and description — clearer, more compelling ` +
+          `in a search result or social share, faithful to what the page actually offers.`
+        : `TASK: Improve this copy — clearer, more persuasive, better structured.`;
     sections.push(
-      `TASK: Improve this copy — clearer, more persuasive, better structured.` +
-        (context.instructions ? `\n\nAdditional direction: ${context.instructions}` : ""),
+      task + (context.instructions ? `\n\nAdditional direction: ${context.instructions}` : ""),
     );
   }
 

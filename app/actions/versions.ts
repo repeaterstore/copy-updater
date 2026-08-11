@@ -107,6 +107,26 @@ export async function renameVersionAction(
     .update(schema.versions)
     .set({ label: label.trim() || "Untitled version", updatedAt: new Date() })
     .where(eq(schema.versions.id, versionId));
+
+  const version = await db.query.versions.findFirst({
+    where: eq(schema.versions.id, versionId),
+  });
+  if (version) revalidatePath(`/pages/${version.pageId}`);
+}
+
+export async function deleteVersionAction(versionId: string): Promise<void> {
+  await requireUser();
+
+  const version = await db.query.versions.findFirst({
+    where: eq(schema.versions.id, versionId),
+  });
+  if (!version) throw new Error("Version not found.");
+
+  // Comments and AI runs cascade. Children keep their own full op list (a
+  // fork copies its parent's ops at creation), so losing the parent only
+  // re-bases their diff onto the live page — their content is untouched.
+  await db.delete(schema.versions).where(eq(schema.versions.id, versionId));
+  revalidatePath(`/pages/${version.pageId}`);
 }
 
 export async function addCommentAction(input: {
