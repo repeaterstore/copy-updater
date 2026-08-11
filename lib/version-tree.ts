@@ -11,6 +11,16 @@
  * page list and the client-side compare selector.
  */
 
+/**
+ * Compare against the page as captured, whatever this version descends from.
+ *
+ * Not a version id, so it needs a sentinel. A fork's default baseline is its
+ * parent, which answers "what did I change" — but the question a reviewer
+ * usually asks last is "what does this do to the live page", and every
+ * intermediate version sat between them with no way to skip past it.
+ */
+export const SNAPSHOT_BASELINE = "__snapshot__";
+
 export interface LineageInput {
   id: string;
   parentVersionId: string | null;

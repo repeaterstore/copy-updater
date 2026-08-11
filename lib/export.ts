@@ -11,6 +11,14 @@ export interface ExportContext {
   pageUrl: string;
   versionLabel: string;
   versionStatus: string;
+  /**
+   * What the diff is measured against, in words.
+   *
+   * A version can be exported against its parent or against the captured page,
+   * and the two reports list different changes. Without saying which, the
+   * reader has no way to tell them apart.
+   */
+  baselineLabel: string;
   author: string | null;
   generatedAt: string;
 }
@@ -30,6 +38,7 @@ export function toMarkdown(diff: ResolvedDiff, context: ExportContext): string {
   lines.push("");
   lines.push(`- **Page:** ${context.pageUrl}`);
   lines.push(`- **Version:** ${context.versionLabel} (${context.versionStatus})`);
+  lines.push(`- **Compared against:** ${context.baselineLabel}`);
   if (context.author) lines.push(`- **Author:** ${context.author}`);
   lines.push(`- **Generated:** ${context.generatedAt}`);
   lines.push(
@@ -176,6 +185,7 @@ export function toJson(diff: ResolvedDiff, context: ExportContext): string {
         status: context.versionStatus,
         author: context.author,
       },
+      comparedAgainst: context.baselineLabel,
       generatedAt: context.generatedAt,
       counts: diff.counts,
       meta: diff.meta.map((m) => ({ field: m.field, before: m.before, after: m.after })),

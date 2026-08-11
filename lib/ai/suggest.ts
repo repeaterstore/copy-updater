@@ -42,6 +42,7 @@ export interface SuggestInput {
   pageUrl: string;
   pageName: string;
   brief: string | null;
+  brandVoice: string | null;
   allBlocks: Block[];
   scopeBlockIds: string[];
   scopeKind: "block" | "section" | "page" | "meta";
@@ -248,6 +249,7 @@ export async function generateSuggestions(
       pageUrl: input.pageUrl,
       pageName: input.pageName,
       brief: input.brief,
+      brandVoice: input.brandVoice,
       mode: input.mode,
       shape: input.shape,
       instructions: input.instructions,

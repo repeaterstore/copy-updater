@@ -10,6 +10,8 @@ export interface SuggestContext {
   pageUrl: string;
   pageName: string;
   brief: string | null;
+  /** House style, chosen per request from the saved voices or typed by hand. */
+  brandVoice?: string | null;
   mode: AiMode;
   shape: PromptShape;
   instructions: string | null;
@@ -92,8 +94,18 @@ export function buildUserPrompt(context: SuggestContext): string {
 
   sections.push(`PAGE: ${context.pageName}\nURL: ${context.pageUrl}`);
 
+  // Voice before brief: the house style is the constant, and the brief may
+  // sharpen it for this page. Stated in that order, a brief that says
+  // "technical" reads as a narrowing of the voice rather than a contradiction.
+  if (context.brandVoice) {
+    sections.push(
+      `BRAND VOICE — how we sound. This overrides the page's existing voice ` +
+        `where they disagree:\n${context.brandVoice}`,
+    );
+  }
+
   if (context.brief) {
-    sections.push(`BRIEF (voice, audience, keywords):\n${context.brief}`);
+    sections.push(`BRIEF (this page's audience, goal, keywords):\n${context.brief}`);
   }
 
   sections.push(

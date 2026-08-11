@@ -6,6 +6,7 @@ import { boundingBoxFor } from "@/lib/ai/crop";
 import {
   MAX_SCOPE_BLOCKS,
   deriveBlocks,
+  type DerivedBlock,
   groupIntoSections,
   sectionScopeFor,
 } from "./derive";
@@ -149,4 +150,98 @@ test("no measured region means no screenshot at all", async () => {
     null,
     "collapsed-menu blocks send no picture rather than the whole page",
   );
+});
+
+/**
+ * The shape that broke the old grouping: a mega-menu holding headings of its
+ * own, and page bands that carry no heading element at all.
+ */
+const MEGA_MENU_PAGE = `<!doctype html><html><body>
+  <div id="menu">
+    <a href="/a">Products</a>
+    <h3>Medium-Sized Buildings</h3><a href="/m">Medium plans</a>
+    <h3>Large Buildings &amp; Campuses</h3><a href="/l">Large plans</a>
+  </div>
+  <section id="hero"><div>Turn-Key DAS Solutions</div><p>Designed and installed.</p></section>
+  <div id="proof"><div>Real buildings. Real results.</div><p>Ten thousand sites.</p></div>
+</body></html>`;
+
+/** Only the menu is collapsed; the page bands are on screen. */
+function megaMenuBlocks(): DerivedBlock[] {
+  const blocks = blocksOf(MEGA_MENU_PAGE);
+  return deriveBlocks(
+    withBoxes(blocks, (b) => !b.id.includes("div:1/")),
+    [],
+  );
+}
+
+test("a hidden mega-menu stays in one group, headings and all", () => {
+  const sections = groupIntoSections(megaMenuBlocks());
+
+  const nav = sections.find((s) => s.chrome === "nav")!;
+  assert.ok(nav, "the collapsed menu is recognised as furniture");
+  const navText = nav.blocks.map((d) => d.text);
+  assert.ok(navText.includes("Medium-Sized Buildings"));
+  assert.ok(navText.includes("Large Buildings & Campuses"));
+
+  // The regression: a heading inside the menu used to end the nav group, so the
+  // rest of the menu was listed as page sections below it.
+  const labels = sections.map((s) => s.label);
+  assert.equal(labels.includes("Medium-Sized Buildings"), false);
+  assert.equal(labels.includes("Large Buildings & Campuses"), false);
+});
+
+test("bands without a heading are named from their opening line", () => {
+  const labels = groupIntoSections(megaMenuBlocks()).map((s) => s.label);
+  // Neither band has a heading element — the old code had nothing to call them
+  // but the nearest preceding heading, which was a dropdown link.
+  assert.ok(labels.includes("Turn-Key DAS Solutions"));
+  assert.ok(labels.includes("Real buildings. Real results."));
+});
+
+test("page copy is never filed under a hidden menu item", () => {
+  const derived = megaMenuBlocks();
+  const body = derived.find((d) => d.text === "Designed and installed.")!;
+  const scope = sectionScopeFor(derived, body.block.id)!;
+
+  assert.equal(scope.label, "Turn-Key DAS Solutions");
+  const texts = derived
+    .filter((d) => scope.blockIds.includes(d.block.id))
+    .map((d) => d.text);
+  assert.equal(texts.some((t) => t.includes("Buildings")), false);
+});
+
+test("subheadings nest under their band instead of ending it", () => {
+  const page = `<!doctype html><html><body>
+    <section><h2>Coverage</h2><p>Intro line.</p>
+      <h3>Small sites</h3><p>Up to 5,000 sq ft.</p>
+      <h3>Campuses</h3><p>Multi-building.</p>
+    </section>
+  </body></html>`;
+  const derived = deriveBlocks(withBoxes(blocksOf(page), () => true), []);
+  const sections = groupIntoSections(derived);
+
+  assert.equal(sections.length, 1, "one band, not three siblings");
+  const band = sections[0];
+  assert.equal(band.label, "Coverage");
+  assert.deepEqual(band.children.map((c) => c.label), ["Small sites", "Campuses"]);
+  // The parent keeps its own copy rather than being truncated at the first h3.
+  assert.deepEqual(band.blocks.map((d) => d.text), ["Coverage", "Intro line."]);
+
+  // A subsection scopes to itself, and says where it sits.
+  const small = derived.find((d) => d.text === "Up to 5,000 sq ft.")!;
+  const scope = sectionScopeFor(derived, small.block.id)!;
+  assert.equal(scope.label, "Coverage › Small sites");
+  assert.equal(scope.blockIds.length, 2);
+});
+
+test("a long list is not carved into one group per row", () => {
+  const items = Array.from({ length: 90 }, (_, i) => `<li>Item ${i}</li>`).join("");
+  const derived = deriveBlocks(
+    withBoxes(blocksOf(`<!doctype html><html><body><h2>Big grid</h2><ul>${items}</ul></body></html>`), () => true),
+    [],
+  );
+  const sections = groupIntoSections(derived);
+  assert.equal(sections.length, 1);
+  assert.equal(sections[0].label, "Big grid");
 });

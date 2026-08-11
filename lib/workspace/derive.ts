@@ -137,11 +137,6 @@ export type ChromeKind = "nav" | "footer";
 export function chromeKindOf(block: Block): ChromeKind | null {
   if (/(^|\/)footer:\d+/.test(block.id)) return "footer";
   if (/(^|\/)(header|nav):\d+/.test(block.id)) return "nav";
-  // Anything before the first heading is furniture: announcement bars, search,
-  // account links, mega-menus. Tag names alone are not enough — plenty of sites
-  // build a header out of plain divs, and on those the run reaches 140 blocks
-  // and swamps the outline.
-  if (block.sectionLabel === null) return "nav";
   return null;
 }
 
@@ -149,6 +144,9 @@ const CHROME_LABEL: Record<ChromeKind, string> = {
   nav: "Navigation & header",
   footer: "Footer",
 };
+
+/** Content that precedes every heading, so there is nothing to name it after. */
+const UNTITLED = "Page content";
 
 export interface Section {
   /**
@@ -159,32 +157,242 @@ export interface Section {
    */
   id: string;
   label: string;
+  /** Ancestor labels then this one, for a scope the AI can place on the page. */
+  path: string[];
+  /** Heading level that opened it: 2 for h2, 3 for h3. Chrome sits at 2. */
+  level: number;
+  /** Blocks directly in this section — not those belonging to its children. */
   blocks: DerivedBlock[];
+  children: Section[];
   /** Set for site furniture, which the outline collapses by default. */
   chrome: ChromeKind | null;
 }
 
+/** h2 → 2, h3 → 3. Anything else reporting as a heading is treated as an h2. */
+function headingLevel(block: Block): number {
+  const match = /^h([1-6])$/.exec(block.tag);
+  return match ? Number(match[1]) : 2;
+}
+
+/** Every block in a section and everything nested beneath it. */
+export function sectionBlocks(section: Section): DerivedBlock[] {
+  return [...section.blocks, ...section.children.flatMap(sectionBlocks)];
+}
+
+export function eachSection(sections: Section[], fn: (s: Section) => void): void {
+  for (const section of sections) {
+    fn(section);
+    eachSection(section.children, fn);
+  }
+}
+
 /**
- * Group blocks for the outline: site furniture into one section each, and
- * everything else under the heading that precedes it.
+ * A container is furniture when almost nothing in it was on screen.
+ *
+ * Mega-menus, drawers and modals are built as one container holding hundreds of
+ * blocks with a handful of always-visible triggers. On waveform.com the menu
+ * container is 224 blocks with 9 visible; the leanest real content band is 57%
+ * visible, so the two do not come close to overlapping.
  */
-export function groupIntoSections(blocks: DerivedBlock[]): Section[] {
-  const sections: Section[] = [];
+const CHROME_VISIBLE_RATIO = 0.25;
 
+/**
+ * Split a container into its own children once it holds more than this.
+ *
+ * Pages disagree about where their sections live. On one waveform.com page each
+ * band is a direct child of body; on another the whole page is a single
+ * `<main>` of 483 blocks. Descending until the groups are a usable size finds
+ * the band level on both without hard-coding either shape.
+ */
+const SPLIT_ABOVE = 60;
+
+/** How deep the descent may go before it stops carving the page up. */
+const MAX_SPLIT_DEPTH = 4;
+
+/**
+ * A container whose children number more than this is a list, not a run of
+ * bands. Descending into a 90-item `<ul>` yields 90 groups of one row each,
+ * which is not an outline — it is the block list with extra headers.
+ */
+const MAX_BANDS_PER_CONTAINER = 12;
+
+/** `body/div:3/div:1/p:2` at depth 1 is `body/div:3`. */
+function containerAt(block: Block, depth: number): string {
+  return block.id.split("/").slice(0, depth + 1).join("/");
+}
+
+interface Group {
+  key: string;
+  depth: number;
+  blocks: DerivedBlock[];
+}
+
+function splitInto(blocks: DerivedBlock[], depth: number): Group[] {
+  const groups: Group[] = [];
   for (const derived of blocks) {
-    const chrome = chromeKindOf(derived.block);
-    const label = chrome ? CHROME_LABEL[chrome] : derived.block.sectionLabel!;
+    const key = containerAt(derived.block, depth);
+    const last = groups[groups.length - 1];
+    if (last && last.key === key) last.blocks.push(derived);
+    else groups.push({ key, depth, blocks: [derived] });
+  }
+  return groups;
+}
 
-    const last = sections.at(-1);
-    // Chrome merges by kind even when not contiguous — a header split across
-    // wrappers should still read as one thing.
-    const merges = last && (chrome ? last.chrome === chrome : last.label === label && !last.chrome);
+function chromeOf(group: Group): ChromeKind | null {
+  const tagged = group.blocks[0] ? chromeKindOf(group.blocks[0].block) : null;
+  if (tagged) return tagged;
+  const visible = group.blocks.filter((d) => isVisible(d.block)).length;
+  return visible / group.blocks.length < CHROME_VISIBLE_RATIO ? "nav" : null;
+}
 
-    if (merges) last!.blocks.push(derived);
-    else sections.push({ id: derived.block.id, label, blocks: [derived], chrome });
+/**
+ * The page's content bands, found by descending until the groups are usable.
+ *
+ * Chrome is never split — a 224-block menu is one thing, not four — and neither
+ * is a group with nothing to split into.
+ */
+function bandsOf(blocks: DerivedBlock[]): { group: Group; chrome: ChromeKind | null }[] {
+  let groups = splitInto(blocks, 1);
+
+  for (let depth = 1; depth < MAX_SPLIT_DEPTH; depth += 1) {
+    const next: Group[] = [];
+    let changed = false;
+    for (const group of groups) {
+      const splittable = group.blocks.length > SPLIT_ABOVE && chromeOf(group) === null;
+      const parts = splittable ? splitInto(group.blocks, group.depth + 1) : [group];
+      const useful = parts.length > 1 && parts.length <= MAX_BANDS_PER_CONTAINER;
+      if (useful) {
+        changed = true;
+        next.push(...parts);
+      } else {
+        next.push(group);
+      }
+    }
+    groups = next;
+    if (!changed) break;
   }
 
-  return sections;
+  const bands = groups.map((group) => ({ group, chrome: chromeOf(group) }));
+
+  // A band that is nothing but a heading names the band after it. Pages
+  // regularly put a section title and its content in sibling containers, and
+  // read as two groups — one of them a single row — that is just noise.
+  for (let i = 0; i < bands.length - 1; i += 1) {
+    const here = bands[i];
+    const next = bands[i + 1];
+    if (here.chrome || next.chrome) continue;
+    if (here.group.blocks.length !== 1) continue;
+    if (here.group.blocks[0].block.role !== "heading") continue;
+    next.group.blocks.unshift(here.group.blocks[0]);
+    bands.splice(i, 1);
+    i -= 1;
+  }
+
+  return bands;
+}
+
+/** The heading that names a band, or its opening line if it has no heading. */
+function labelFor(group: Group): string {
+  const visible = group.blocks.filter((d) => isVisible(d.block));
+  const usable = visible.length > 0 ? visible : group.blocks;
+  const heading = usable.find((d) => d.block.role === "heading");
+  if (heading) return heading.text || heading.block.text;
+  // Most marketing bands have no heading element at all — the eyebrow or lead
+  // line is styled as one. It names the band better than "Section 4" does.
+  const lead = usable.find((d) => d.text.trim().length > 12) ?? usable[0];
+  const text = lead?.text.trim() ?? "";
+  return text ? (text.length > 48 ? `${text.slice(0, 47)}…` : text) : UNTITLED;
+}
+
+/**
+ * Group blocks for the outline.
+ *
+ * Three signals do the work, and all come free with the capture.
+ *
+ * **Structure** decides where sections begin. Headings looked like the obvious
+ * answer and are not: of eleven bands on waveform.com's custom-solutions page,
+ * two have a heading element. The rest open with a styled div. Grouping by
+ * heading therefore filed 150 blocks of page content — most of the page — under
+ * "Private 5G Design & Deployment", which is a link inside a dropdown.
+ *
+ * **Visibility** decides what is furniture. Tag names are not enough, since
+ * plenty of sites build a header out of plain divs, and the menu container here
+ * is 4% visible against 57% for the leanest real band.
+ *
+ * **Heading level** decides nesting inside a band, so an h3 becomes a child of
+ * the h2 above it instead of a sibling that truncates it.
+ */
+export function groupIntoSections(blocks: DerivedBlock[]): Section[] {
+  const roots: Section[] = [];
+  const chromeSections = new Map<ChromeKind, Section>();
+
+  const makeSection = (
+    derived: DerivedBlock,
+    label: string,
+    level: number,
+    parentPath: string[],
+    chrome: ChromeKind | null,
+  ): Section => ({
+    id: derived.block.id,
+    label,
+    path: [...parentPath, label],
+    level,
+    blocks: [derived],
+    children: [],
+    chrome,
+  });
+
+  const bands = bandsOf(blocks);
+  const firstContent = bands.findIndex((b) => b.chrome === null);
+
+  bands.forEach(({ group, chrome }, index) => {
+    // Furniture merges into one group per kind, but only where furniture
+    // actually lives: the run at the top of the document, and anything tagged
+    // <footer>. A hidden drawer halfway down the page is not the header, and
+    // calling it that made "Navigation & header" 816 blocks of the homepage.
+    const leading = firstContent === -1 || index < firstContent;
+    const merge = chrome === "footer" || (chrome === "nav" && leading);
+
+    if (merge && chrome) {
+      const existing = chromeSections.get(chrome);
+      if (existing) existing.blocks.push(...group.blocks);
+      else {
+        const section = makeSection(group.blocks[0], CHROME_LABEL[chrome], 2, [], chrome);
+        section.blocks.push(...group.blocks.slice(1));
+        chromeSections.set(chrome, section);
+        roots.push(section);
+      }
+      return;
+    }
+
+    const band = makeSection(group.blocks[0], labelFor(group), 2, [], chrome);
+    roots.push(band);
+
+    // Subsections within the band. The band's own label already came from its
+    // first heading, so that heading does not open a child of itself.
+    const stack: Section[] = [band];
+    for (const derived of group.blocks.slice(1)) {
+      const opens = derived.block.role === "heading" && isVisible(derived.block);
+      if (opens) {
+        const level = Math.max(headingLevel(derived.block), band.level + 1);
+        while (stack.length > 1 && stack[stack.length - 1].level >= level) stack.pop();
+        const parent = stack[stack.length - 1];
+        const child = makeSection(
+          derived,
+          derived.text || derived.block.text,
+          level,
+          parent.path,
+          null,
+        );
+        parent.children.push(child);
+        stack.push(child);
+        continue;
+      }
+      stack[stack.length - 1].blocks.push(derived);
+    }
+  });
+
+  return roots;
 }
 
 /**
@@ -206,6 +414,7 @@ export function isVisible(block: Block): boolean {
 export const MAX_SCOPE_BLOCKS = 60;
 
 export interface SectionScope {
+  /** "Why Enterprises Choose Waveform › Coverage" for a nested section. */
   label: string;
   blockIds: string[];
   /** Blocks dropped because the section exceeded MAX_SCOPE_BLOCKS. */
@@ -225,15 +434,21 @@ export function sectionScopeFor(
 ): SectionScope | null {
   if (!blockId) return null;
 
-  const sections = groupIntoSections(blocks);
-  const section = sections.find((s) => s.blocks.some((b) => b.block.id === blockId));
+  // The section that directly holds the block, not an ancestor: selecting a
+  // paragraph inside a subsection should scope to that subsection, which is
+  // what "rewrite this section" means to whoever clicked it.
+  let section: Section | null = null;
+  eachSection(groupIntoSections(blocks), (candidate) => {
+    if (candidate.blocks.some((b) => b.block.id === blockId)) section = candidate;
+  });
   if (!section) return null;
+  const found: Section = section;
 
-  const visible = section.blocks.filter((d) => isVisible(d.block));
-  const usable = visible.length > 0 ? visible : section.blocks;
+  const visible = found.blocks.filter((d) => isVisible(d.block));
+  const usable = visible.length > 0 ? visible : found.blocks;
 
   return {
-    label: section.label,
+    label: found.path.join(" › "),
     blockIds: usable.slice(0, MAX_SCOPE_BLOCKS).map((d) => d.block.id),
     trimmed: Math.max(0, usable.length - MAX_SCOPE_BLOCKS),
   };

@@ -7,6 +7,7 @@ import type { AiMode, ReasoningLevel } from "@/db/schema";
 import { describeAiError, generateSuggestions, type SuggestOption } from "@/lib/ai/suggest";
 import { cropToBlocks } from "@/lib/ai/crop";
 import { loadSettings, SETTINGS_ID, verifyKey } from "@/lib/ai/openrouter";
+import { resolveBrandVoice } from "@/lib/ai/voices";
 import { encryptSecret } from "@/lib/crypto";
 import { OpListSchema } from "@/lib/ops/schema";
 import type { Op } from "@/lib/ops/types";
@@ -44,6 +45,10 @@ export async function suggestAction(input: {
   sectionLabel?: string | null;
   webSearch: boolean;
   distinctOptions: boolean;
+  /** A saved voice, looked up server-side. Null when using custom text. */
+  brandVoiceId?: string | null;
+  /** One-off voice typed into the panel, used only when no id is given. */
+  customBrandVoice?: string | null;
 }): Promise<{ runId: string; options: SuggestOption[] } | { error: string }> {
   const user = await requireUser();
 
@@ -95,6 +100,10 @@ export async function suggestAction(input: {
   }
 
   const reasoningLevel = reasoningFor(settings.reasoningLevel, input.mode, input.shape);
+  const brandVoice = await resolveBrandVoice({
+    brandVoiceId: input.brandVoiceId ?? null,
+    customBrandVoice: input.customBrandVoice ?? null,
+  });
 
   try {
     const { options, modelId } = await generateSuggestions({
@@ -110,6 +119,7 @@ export async function suggestAction(input: {
       pageUrl: page.url,
       pageName: page.name,
       brief: page.brief,
+      brandVoice,
       allBlocks: blocks,
       scopeBlockIds: input.scopeBlockIds,
       scopeKind: input.scopeKind,
@@ -131,6 +141,7 @@ export async function suggestAction(input: {
         distinctOptions: input.distinctOptions,
         scope: { kind: input.scopeKind, blockIds: input.scopeBlockIds },
         instructions: input.instructions,
+        brandVoice,
         options: options.map((o) => ({ label: o.label, rationale: o.rationale, ops: o.ops })),
         createdBy: user.id,
       })
@@ -148,6 +159,7 @@ export async function suggestAction(input: {
       webSearch: input.webSearch,
       distinctOptions: input.distinctOptions,
       instructions: input.instructions,
+      brandVoice,
       error: message,
       createdBy: user.id,
     });

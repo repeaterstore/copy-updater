@@ -104,6 +104,7 @@ export default async function PageDetail({
 
         <CaptureStatus
           pageId={page.id}
+          snapshotId={latest?.id ?? null}
           status={latest?.status ?? "pending"}
           error={latest?.error ?? null}
           blockCount={latest?.blocks.length ?? 0}

@@ -10,12 +10,15 @@ import { recaptureAction } from "@/app/actions/pages";
  */
 export function CaptureStatus({
   pageId,
+  snapshotId,
   status,
   error,
   blockCount,
   capturedAt,
 }: {
   pageId: string;
+  /** Null until the first capture row exists. */
+  snapshotId: string | null;
   status: string;
   error: string | null;
   blockCount: number;
@@ -70,6 +73,20 @@ export function CaptureStatus({
         {blockCount} copy blocks captured
         {capturedAt ? ` · ${new Date(capturedAt).toLocaleString()}` : ""}
       </span>
+      {/* Looking at the frozen page should not cost a version. Without this the
+          only way to see what was captured is to create one, which means
+          committing to an object before knowing the capture is any good. */}
+      {snapshotId ? (
+        <a
+          href={`/api/snapshots/${snapshotId}/html`}
+          target="_blank"
+          rel="noreferrer noopener"
+          className="text-[var(--color-ink-soft)] underline underline-offset-2 hover:text-[var(--color-ink)]"
+          title="Open the frozen snapshot in a new tab, exactly as it was captured"
+        >
+          View snapshot
+        </a>
+      ) : null}
       <form
         action={async () => {
           await recaptureAction(pageId);

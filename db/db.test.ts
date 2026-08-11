@@ -26,7 +26,8 @@ test("migrations apply and every table exists", async () => {
   );
   const names = result.rows.map((r) => r.table_name).sort();
   for (const expected of [
-    "ai_runs", "comments", "pages", "settings", "snapshots", "users", "versions",
+    "ai_runs", "brand_voices", "comments", "pages", "settings", "snapshots",
+    "users", "versions",
   ]) {
     assert.ok(names.includes(expected), `table ${expected} exists`);
   }
@@ -202,6 +203,41 @@ test("home listing counts versions and reports the latest snapshot status", asyn
   assert.equal(a?.snapshotStatus, "ready");
   assert.equal(b?.versionCount, 0);
   assert.equal(b?.snapshotStatus, "pending");
+
+  await client.close();
+});
+
+test("only one brand voice can be the default", async () => {
+  const { db, client } = await freshDb();
+
+  await db.insert(schema.brandVoices).values({
+    name: "House", body: "Plain and specific.", isDefault: true,
+  });
+  await db.insert(schema.brandVoices).values({
+    name: "Support", body: "Warmer, more patient.", isDefault: false,
+  });
+
+  // The guard is the partial unique index, not the action that sets it — a
+  // second default has to be impossible even if some code path forgets to
+  // clear the first.
+  await assert.rejects(
+    () => db.insert(schema.brandVoices).values({
+      name: "Campaign", body: "Punchy.", isDefault: true,
+    }),
+    (error: unknown) => {
+      const cause = (error as { cause?: { message?: string } }).cause;
+      assert.match(String(cause?.message ?? error), /duplicate key|unique/i);
+      return true;
+    },
+  );
+
+  // Any number of non-defaults is fine, which the index must not prevent.
+  await db.insert(schema.brandVoices).values({
+    name: "Technical", body: "Specs first.", isDefault: false,
+  });
+  const rows = await db.select().from(schema.brandVoices);
+  assert.equal(rows.length, 3);
+  assert.equal(rows.filter((r) => r.isDefault).length, 1);
 
   await client.close();
 });

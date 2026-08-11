@@ -18,7 +18,7 @@ import {
   setVersionStatusAction,
 } from "@/app/actions/versions";
 import type { VersionStatus } from "@/db/schema";
-import { orderByLineage, type LineageRow } from "@/lib/version-tree";
+import { orderByLineage, SNAPSHOT_BASELINE, type LineageRow } from "@/lib/version-tree";
 import { AiPanel, type AiConfig } from "./ai-panel";
 import { CommentPanel, type CommentItem } from "./comment-panel";
 import { DeviceToggle, PreviewPane, type Device } from "./preview-pane";
@@ -689,6 +689,15 @@ function Toolbar({
           <option value="">
             {parentLabel ? `${parentLabel} (parent)` : "Live page (as captured)"}
           </option>
+          {/*
+            A root version's default baseline already is the capture, so the
+            option would be a duplicate. On a fork it is the only way to see the
+            proposal against what is actually published, rather than against
+            whichever draft it happened to be forked from.
+          */}
+          {parentLabel ? (
+            <option value={SNAPSHOT_BASELINE}>Live page (as captured)</option>
+          ) : null}
           {lineage
             .filter((row) => row.version.id !== version.id)
             .map((row) => (

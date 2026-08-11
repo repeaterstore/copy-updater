@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { AppHeader } from "@/components/app-header";
 import { AiSettings } from "@/components/ai-settings";
+import { BrandVoices } from "@/components/brand-voices";
 import { loadSettings, SUGGESTED_MODELS } from "@/lib/ai/openrouter";
+import { listBrandVoices } from "@/lib/ai/voices";
 import { requireUser } from "@/lib/session";
 
 export const dynamic = "force-dynamic";
@@ -9,6 +11,7 @@ export const dynamic = "force-dynamic";
 export default async function SettingsPage() {
   const user = await requireUser();
   const settings = await loadSettings();
+  const voices = await listBrandVoices();
 
   return (
     <div className="min-h-screen">
@@ -32,6 +35,15 @@ export default async function SettingsPage() {
             fallbackModels: settings?.fallbackModels ?? [],
             reasoningLevel: settings?.reasoningLevel ?? "medium",
           }}
+        />
+
+        <BrandVoices
+          voices={voices.map((v) => ({
+            id: v.id,
+            name: v.name,
+            body: v.body,
+            isDefault: v.isDefault,
+          }))}
         />
       </main>
     </div>

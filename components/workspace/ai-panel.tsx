@@ -9,11 +9,22 @@ import { htmlToText, type SectionScope } from "@/lib/workspace/derive";
 
 type Scope = "block" | "section" | "page";
 
+export interface BrandVoiceOption {
+  id: string;
+  name: string;
+  isDefault: boolean;
+}
+
 export interface AiConfig {
   configured: boolean;
   models: string[];
   defaultModel: string | null;
+  brandVoices: BrandVoiceOption[];
 }
+
+/** Sentinel values for the voice picker; neither can collide with a uuid. */
+const VOICE_NONE = "";
+const VOICE_CUSTOM = "custom";
 
 export function AiPanel({
   versionId,
@@ -42,6 +53,12 @@ export function AiPanel({
   const [shape, setShape] = useState<"optimize" | "directives">("optimize");
   const [scope, setScope] = useState<Scope>("block");
   const [instructions, setInstructions] = useState("");
+  // The team's default is preselected; "None" is still reachable, for pages
+  // whose existing voice is the thing being preserved.
+  const [voiceId, setVoiceId] = useState(
+    config.brandVoices.find((v) => v.isDefault)?.id ?? VOICE_NONE,
+  );
+  const [customVoice, setCustomVoice] = useState("");
   const [optionCount, setOptionCount] = useState(3);
   const [webSearch, setWebSearch] = useState(false);
   const [distinctOptions, setDistinctOptions] = useState(false);
@@ -97,6 +114,8 @@ export function AiPanel({
         sectionLabel: scope === "section" ? (section?.label ?? null) : null,
         webSearch,
         distinctOptions,
+        brandVoiceId: voiceId === VOICE_CUSTOM || voiceId === VOICE_NONE ? null : voiceId,
+        customBrandVoice: voiceId === VOICE_CUSTOM ? customVoice.trim() || null : null,
       });
       if ("error" in result) setError(result.error);
       else {
@@ -180,6 +199,46 @@ export function AiPanel({
         {mode === "layout" ? (
           <p className="rounded-md bg-[var(--color-moved-soft)] px-2 py-1.5 text-[11px] text-[var(--color-ink-soft)]">
             Layout mode may add, remove, reorder and restyle elements — not just rewrite text.
+          </p>
+        ) : null}
+
+        <label className="block">
+          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
+            Brand voice
+          </span>
+          <select
+            className="field py-1 text-xs"
+            value={voiceId}
+            onChange={(e) => setVoiceId(e.target.value)}
+          >
+            <option value={VOICE_NONE}>None — match the page</option>
+            {config.brandVoices.map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.name}
+                {v.isDefault ? " (default)" : ""}
+              </option>
+            ))}
+            <option value={VOICE_CUSTOM}>Custom…</option>
+          </select>
+        </label>
+
+        {voiceId === VOICE_CUSTOM ? (
+          <textarea
+            rows={3}
+            className="field resize-y text-xs"
+            placeholder="How this should sound, just for this request. Save it in Settings if you want it again."
+            value={customVoice}
+            onChange={(e) => setCustomVoice(e.target.value)}
+          />
+        ) : null}
+
+        {config.brandVoices.length === 0 && voiceId !== VOICE_CUSTOM ? (
+          <p className="text-[10px] text-[var(--color-ink-faint)]">
+            No saved voices —{" "}
+            <a href="/settings" className="underline underline-offset-2">
+              add one in Settings
+            </a>{" "}
+            to reuse a house style across pages.
           </p>
         ) : null}
 

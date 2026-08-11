@@ -220,12 +220,16 @@ test("capture → resolve → diff → export round trip", { timeout: 180_000 },
     pageUrl: "https://example.com/booster",
     versionLabel: "Copy pass",
     versionStatus: "approved",
+    baselineLabel: "Live page (as captured)",
     author: "copy@waveform.com",
     generatedAt: "2026-08-04T00:00:00.000Z",
   };
 
   const md = toMarkdown(diffResolved(baseline, v2.resolved), context);
   assert.match(md, /# Copy changes — Signal Booster/);
+  // A report has to say what it is a diff against; the same version exported
+  // against its parent and against the capture lists different changes.
+  assert.match(md, /\*\*Compared against:\*\* Live page \(as captured\)/);
   assert.match(md, /Faster signal boosters/);
   assert.match(md, /5G Signal Boosters that actually work/);
   assert.match(md, /Added listitem/);

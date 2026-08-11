@@ -6,9 +6,11 @@ import { AppHeader } from "@/components/app-header";
 import { NewVersionButton } from "@/components/new-version-button";
 import { Workspace, type WorkspaceVersion } from "@/components/workspace/workspace";
 import { loadSettings } from "@/lib/ai/openrouter";
+import { listBrandVoices } from "@/lib/ai/voices";
 import { browserScriptHash } from "@/lib/browser/bundle";
 import { requireUser } from "@/lib/session";
-import { baselineFor, listVersions } from "@/lib/versions";
+import { SNAPSHOT_BASELINE } from "@/lib/version-tree";
+import { baselineFor, listVersions, snapshotBaseline } from "@/lib/versions";
 
 export const dynamic = "force-dynamic";
 
@@ -34,11 +36,13 @@ export default async function VersionWorkspace({
   });
   if (!snapshot || snapshot.status !== "ready") notFound();
 
-  // The baseline this version is shown against: an explicitly chosen version,
-  // otherwise its parent, otherwise the page as captured.
+  // The baseline this version is shown against: the page as captured, an
+  // explicitly chosen version, otherwise its parent, otherwise the capture.
   const compareId = compare && compare !== "" ? compare : null;
   let baseline;
-  if (compareId) {
+  if (compareId === SNAPSHOT_BASELINE) {
+    baseline = await snapshotBaseline(version.snapshotId);
+  } else if (compareId) {
     const other = await db.query.versions.findFirst({
       where: eq(schema.versions.id, compareId),
     });
@@ -66,6 +70,7 @@ export default async function VersionWorkspace({
   const current = versions.find((v) => v.id === version.id)!;
 
   const settings = await loadSettings();
+  const voices = await listBrandVoices();
 
   const comments = await db
     .select({
@@ -111,6 +116,11 @@ export default async function VersionWorkspace({
           configured: Boolean(settings?.openrouterKeyEncrypted),
           models: settings?.models ?? [],
           defaultModel: settings?.defaultModel ?? null,
+          brandVoices: voices.map((v) => ({
+            id: v.id,
+            name: v.name,
+            isDefault: v.isDefault,
+          })),
         }}
         comments={comments.map((c) => ({
           id: c.id,

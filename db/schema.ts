@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   boolean,
   index,
@@ -140,6 +141,36 @@ export const settings = pgTable("settings", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
 
+/**
+ * Reusable house voices, shared by the team.
+ *
+ * Distinct from a page's brief: the brief says who this page is for and what it
+ * has to do, the voice says how the company sounds everywhere. Keeping them
+ * apart means the voice can be written once and picked per request rather than
+ * being retyped into every page's brief.
+ */
+export const brandVoices = pgTable(
+  "brand_voices",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: text("name").notNull(),
+    /** Prose, given to the model verbatim. */
+    body: text("body").notNull(),
+    /** Preselected in the suggest panel. At most one row may have this set. */
+    isDefault: boolean("is_default").notNull().default(false),
+    createdBy: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    // Enforced in the database, not just in the action that sets it: a partial
+    // unique index lets any number of rows be false and only one be true.
+    uniqueIndex("brand_voices_one_default_idx")
+      .on(t.isDefault)
+      .where(sql`${t.isDefault}`),
+  ],
+);
+
 export const aiModes = ["copy", "layout"] as const;
 export type AiMode = (typeof aiModes)[number];
 
@@ -162,6 +193,11 @@ export const aiRuns = pgTable(
     /** Which blocks were in scope. */
     scope: jsonb("scope").$type<{ kind: string; blockIds: string[] }>(),
     instructions: text("instructions"),
+    /**
+     * The voice text as sent, not a reference to brand_voices. Voices get
+     * edited; a run should still say what it was actually told.
+     */
+    brandVoice: text("brand_voice"),
     options: jsonb("options").$type<
       { label: string; rationale: string; ops: Op[] }[]
     >().notNull().default([]),

@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { toCsv, toJson, toMarkdown, type ExportContext } from "@/lib/export";
 import { requireUser } from "@/lib/session";
+import { SNAPSHOT_BASELINE } from "@/lib/version-tree";
 import { diffVersions } from "@/lib/versions";
 
 export const dynamic = "force-dynamic";
@@ -42,15 +43,24 @@ export async function GET(
     : null;
 
   // Default to the parent, so the report shows what this version changed rather
-  // than everything that has ever changed on the page.
-  const baselineId = compare && compare !== "" ? compare : version.parentVersionId;
+  // than everything that has ever changed on the page. A null baseline means
+  // the capture, which is also what the explicit "live page" choice resolves to.
+  const chosen = compare && compare !== "" ? compare : version.parentVersionId;
+  const baselineId = chosen === SNAPSHOT_BASELINE ? null : chosen;
   const diff = await diffVersions(baselineId, versionId);
+
+  const baselineVersion = baselineId
+    ? await db.query.versions.findFirst({ where: eq(schema.versions.id, baselineId) })
+    : null;
 
   const context: ExportContext = {
     pageName: page?.name ?? "Page",
     pageUrl: page?.url ?? "",
     versionLabel: version.label,
     versionStatus: version.status,
+    baselineLabel: baselineVersion
+      ? `${baselineVersion.label}${baselineVersion.id === version.parentVersionId ? " (parent)" : ""}`
+      : "Live page (as captured)",
     author: author?.name ?? author?.email ?? null,
     generatedAt: new Date().toISOString(),
   };

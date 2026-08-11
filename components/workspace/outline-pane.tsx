@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   groupIntoSections,
   isVisible,
+  sectionBlocks,
   type DerivedBlock,
   type Section,
 } from "@/lib/workspace/derive";
@@ -69,22 +70,33 @@ export function OutlinePane({
   const [toggled, setToggled] = useState<Record<string, boolean>>({});
   const narrowed = query.trim() !== "" || changedOnly || commentedOnly;
 
-  const sectionOfSelection = useMemo(
-    () => sections.find((s) => s.blocks.some((b) => b.block.id === selectedId))?.id,
-    [sections, selectedId],
-  );
+  /**
+   * Every section on the path to the selection, so a block inside a subsection
+   * opens its parents too rather than staying hidden behind a closed ancestor.
+   */
+  const openForSelection = useMemo(() => {
+    const ids = new Set<string>();
+    const mark = (section: Section): boolean => {
+      const here = section.blocks.some((b) => b.block.id === selectedId);
+      const below = section.children.map(mark).some(Boolean);
+      if (here || below) ids.add(section.id);
+      return here || below;
+    };
+    sections.forEach(mark);
+    return ids;
+  }, [sections, selectedId]);
 
   const isOpen = (section: Section) => {
     const explicit = toggled[section.id];
     if (explicit !== undefined) return explicit;
     if (narrowed) return true;
-    return section.id === sectionOfSelection;
+    return openForSelection.has(section.id);
   };
 
   const toggle = (id: string) =>
     setToggled((current) => ({
       ...current,
-      [id]: !(current[id] ?? (narrowed || id === sectionOfSelection)),
+      [id]: !(current[id] ?? (narrowed || openForSelection.has(id))),
     }));
 
   /**
@@ -174,15 +186,31 @@ export function OutlinePane({
           </p>
         ) : null}
 
-        {sections.map((section) => {
-          const open = isOpen(section);
-          const changedHere = section.blocks.filter((d) => d.changed).length;
-          const commentsHere = section.blocks.filter(
-            (d) => commentCounts[d.block.id],
-          ).length;
+        {sections.map((section) => renderSection(section, 0))}
 
-          return (
-          <div key={section.id} className="mb-1.5">
+        {sections.length === 0 ? (
+          <p className="px-2 py-6 text-center text-xs text-[var(--color-ink-faint)]">
+            Nothing matches.
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+
+  function renderSection(section: Section, depth: number) {
+    const open = isOpen(section);
+    // Counts cover the subtree: a collapsed parent must still show that
+    // something changed inside one of its subsections.
+    const all = sectionBlocks(section);
+    const changedHere = all.filter((d) => d.changed).length;
+    const commentsHere = all.filter((d) => commentCounts[d.block.id]).length;
+
+    return (
+          <div
+            key={section.id}
+            className="mb-1.5"
+            style={depth > 0 ? { marginLeft: depth * 10 } : undefined}
+          >
             <div className="flex items-center gap-0.5">
               {/* Chevron toggles; the label navigates. Separating them means
                   opening a section does not also move the preview, and jumping
@@ -201,12 +229,12 @@ export function OutlinePane({
               <button
                 type="button"
                 onClick={() => onSelectSection(section.blocks[0].block.id)}
-                title={`Jump to this section (${section.blocks.length} blocks) — then choose Section scope to rewrite it as a whole`}
+                title={`Jump to this section (${all.length} blocks) — then choose Section scope to rewrite it as a whole`}
                 className="flex min-w-0 flex-1 items-center gap-1.5 rounded px-1 py-1 text-left text-[10px] font-semibold uppercase tracking-wide text-[var(--color-ink-faint)] transition-colors hover:bg-[var(--color-sunken)] hover:text-[var(--color-ink)]"
               >
                 <span className="truncate">{section.label}</span>
                 <span className="shrink-0 font-normal normal-case opacity-70">
-                  {section.blocks.length}
+                  {all.length}
                 </span>
                 {!open && changedHere > 0 ? (
                   <span className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-changed)]" />
@@ -251,16 +279,10 @@ export function OutlinePane({
                 ) : null}
               </button>
             )) : null}
+            {/* Subsections after this section's own copy, which is the order
+                they appear in on the page. */}
+            {open ? section.children.map((child) => renderSection(child, depth + 1)) : null}
           </div>
-          );
-        })}
-
-        {sections.length === 0 ? (
-          <p className="px-2 py-6 text-center text-xs text-[var(--color-ink-faint)]">
-            Nothing matches.
-          </p>
-        ) : null}
-      </div>
-    </div>
-  );
+    );
+  }
 }

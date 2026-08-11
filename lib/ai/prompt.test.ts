@@ -115,3 +115,56 @@ test("a short page is passed through whole", () => {
   const blocks = blocksOf();
   assert.deepEqual(pageSummaryFor(blocks, 40), blocks);
 });
+
+test("brand voice and page brief are separate sections, voice first", () => {
+  const blocks = blocksOf();
+  const prompt = buildUserPrompt({
+    pageUrl: "https://www.waveform.com/",
+    pageName: "Waveform home",
+    brief: "Audience: IT directors evaluating DAS vendors.",
+    brandVoice: "Plain and specific. Never say revolutionary.",
+    mode: "copy",
+    shape: "optimize",
+    instructions: null,
+    optionCount: 3,
+    meta: META,
+    scope: blocks.slice(0, 1),
+    context: [],
+    cssIndex: {},
+    angle: null,
+    webSearch: false,
+    scopeKind: "block",
+    sectionLabel: null,
+  });
+
+  assert.match(prompt, /BRAND VOICE/);
+  assert.match(prompt, /Never say revolutionary/);
+  assert.match(prompt, /IT directors evaluating DAS vendors/);
+  // House style is the constant; the page brief narrows it. Stated the other
+  // way round, a brief reads as contradicting the voice rather than refining it.
+  assert.ok(prompt.indexOf("BRAND VOICE") < prompt.indexOf("BRIEF"));
+});
+
+test("no brand voice means no brand voice section", () => {
+  const blocks = blocksOf();
+  const prompt = buildUserPrompt({
+    pageUrl: "https://www.waveform.com/",
+    pageName: "Waveform home",
+    brief: null,
+    brandVoice: null,
+    mode: "copy",
+    shape: "optimize",
+    instructions: null,
+    optionCount: 3,
+    meta: META,
+    scope: blocks.slice(0, 1),
+    context: [],
+    cssIndex: {},
+    angle: null,
+    webSearch: false,
+    scopeKind: "block",
+    sectionLabel: null,
+  });
+
+  assert.doesNotMatch(prompt, /BRAND VOICE/);
+});
