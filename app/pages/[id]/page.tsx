@@ -56,7 +56,6 @@ export default async function PageDetail({
     .where(eq(schema.versions.pageId, id))
     .orderBy(desc(schema.versions.createdAt));
 
-
   const ready = latest?.status === "ready";
 
   return (

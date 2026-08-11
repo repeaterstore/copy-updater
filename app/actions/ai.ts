@@ -80,10 +80,17 @@ export async function suggestAction(input: {
   if (snapshot.screenshotPath) {
     const full = await readDataFile(snapshot.screenshotPath).catch(() => null);
     if (full) {
-      // Null when the scope has no measured region (a collapsed menu item, say);
+      // Null when the region has no measured box (a collapsed menu item, say);
       // the request then goes without a picture rather than with a useless one.
-      const inScope = blocks.filter((b) => input.scopeBlockIds.includes(b.id));
-      screenshot = inScope.length ? await cropToBlocks(full, inScope) : null;
+      //
+      // A meta request has no blocks in scope at all, but "what is this page"
+      // is precisely what a title and description have to answer — so it gets
+      // the top of the page, which is what a search result competes to sum up.
+      const region =
+        input.scopeKind === "meta"
+          ? blocks.slice(0, 10)
+          : blocks.filter((b) => input.scopeBlockIds.includes(b.id));
+      screenshot = region.length ? await cropToBlocks(full, region) : null;
     }
   }
 

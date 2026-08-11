@@ -103,14 +103,12 @@ export async function renameVersionAction(
   label: string,
 ): Promise<void> {
   await requireUser();
-  await db
+  const [version] = await db
     .update(schema.versions)
     .set({ label: label.trim() || "Untitled version", updatedAt: new Date() })
-    .where(eq(schema.versions.id, versionId));
+    .where(eq(schema.versions.id, versionId))
+    .returning({ pageId: schema.versions.pageId });
 
-  const version = await db.query.versions.findFirst({
-    where: eq(schema.versions.id, versionId),
-  });
   if (version) revalidatePath(`/pages/${version.pageId}`);
 }
 

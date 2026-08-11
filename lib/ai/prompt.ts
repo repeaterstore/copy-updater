@@ -145,8 +145,12 @@ export function buildUserPrompt(context: SuggestContext): string {
   }
 
   if (context.context.length) {
+    const heading =
+      context.scopeKind === "meta"
+        ? `WHAT THE PAGE SAYS (read-only) — the copy the meta fields have to describe:`
+        : `SURROUNDING COPY (read-only, for tone and continuity):`;
     sections.push(
-      `SURROUNDING COPY (read-only, for tone and continuity):\n` +
+      `${heading}\n` +
         context.context
           .map((b) => `- ${b.role}: ${JSON.stringify(b.text.slice(0, 180))}`)
           .join("\n"),
@@ -200,6 +204,33 @@ export function buildUserPrompt(context: SuggestContext): string {
   }
 
   return sections.join("\n\n");
+}
+
+/**
+ * A readable sample of the whole page, for requests with no blocks in scope.
+ *
+ * A meta title and description have to describe what the page offers, and the
+ * page is exactly what a meta-scoped request has none of — there is no scope to
+ * take neighbours around. Sending all 200-odd blocks of a real marketing page
+ * would be mostly navigation and footer, so this keeps the top of the page,
+ * where the proposition lives, plus the headings that say what the rest covers.
+ */
+export function pageSummaryFor(all: Block[], limit = 40): Block[] {
+  if (all.length <= limit) return all;
+
+  const picked = new Set<number>();
+  const lead = Math.round(limit / 2);
+  for (let i = 0; i < lead && i < all.length; i += 1) picked.add(i);
+  all.forEach((block, i) => {
+    if (block.role === "heading") picked.add(i);
+  });
+
+  // Sorted before trimming, so what survives the cap is the top of the page
+  // rather than whichever headings happened to be found last.
+  return [...picked]
+    .sort((a, b) => a - b)
+    .slice(0, limit)
+    .map((i) => all[i]);
 }
 
 /**

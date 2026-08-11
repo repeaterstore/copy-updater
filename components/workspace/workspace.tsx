@@ -250,22 +250,41 @@ export function Workspace({
     [],
   );
 
-  const save = useCallback(() => {
-    setProblems([]);
-    const snapshot = ops;
-    startSaving(async () => {
-      try {
-        const result = await saveOpsAction(version.id, snapshot);
-        setSavedOps(snapshot);
-        if (result.failures.length) {
-          setProblems(result.failures.map((f) => f.reason));
+  /**
+   * The op list autosave last attempted, so a save the server rejects is not
+   * retried every two seconds forever. Cleared on success: left set, returning
+   * to a state that had already been autosaved once — reverting a block,
+   * un-applying a suggestion — would silently stop autosaving that content.
+   */
+  const lastAutosaveAttempt = useRef<string | null>(null);
+
+  const runSave = useCallback(
+    (refresh: boolean) => {
+      setProblems([]);
+      const snapshot = ops;
+      startSaving(async () => {
+        try {
+          const result = await saveOpsAction(version.id, snapshot);
+          setSavedOps(snapshot);
+          lastAutosaveAttempt.current = null;
+          if (result.failures.length) {
+            setProblems(result.failures.map((f) => f.reason));
+          }
+          // Autosave skips the refresh. It would re-render the route — every
+          // baseline block back down the wire — a couple of seconds after each
+          // pause in typing, and nothing the editor displays comes from the
+          // server response anyway. saveOpsAction still revalidates, so the
+          // next navigation is fresh.
+          if (refresh) router.refresh();
+        } catch (error) {
+          setProblems([error instanceof Error ? error.message : String(error)]);
         }
-        router.refresh();
-      } catch (error) {
-        setProblems([error instanceof Error ? error.message : String(error)]);
-      }
-    });
-  }, [ops, version.id, router]);
+      });
+    },
+    [ops, version.id, router],
+  );
+
+  const save = useCallback(() => runSave(true), [runSave]);
 
   // Warn before losing unsaved edits.
   useEffect(() => {
@@ -281,20 +300,19 @@ export function Workspace({
    * Two deliberate exclusions:
    *  - Someone else's version. Saving there rewrites their proposal, which is
    *    what the fork prompt exists to prevent — it must stay a deliberate act.
-   *  - After a failed save of the same op list, so a server-side rejection
+   *  - An op list a save has already failed on, so a server-side rejection
    *    does not retry every two seconds forever.
    */
-  const lastAutosaveAttempt = useRef<string | null>(null);
   useEffect(() => {
     if (!dirty || readOnly || isSaving || !version.isMine) return;
     const key = JSON.stringify(ops);
     if (lastAutosaveAttempt.current === key) return;
     const timer = setTimeout(() => {
       lastAutosaveAttempt.current = key;
-      save();
+      runSave(false);
     }, 2000);
     return () => clearTimeout(timer);
-  }, [dirty, ops, readOnly, isSaving, version.isMine, save]);
+  }, [dirty, ops, readOnly, isSaving, version.isMine, runSave]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -593,7 +611,8 @@ function EditableLabel({ versionId, label }: { versionId: string; label: string 
   );
 }
 
-function Toolbar({  version,
+function Toolbar({
+  version,
   versions,
   lineage,
   parentLabel,

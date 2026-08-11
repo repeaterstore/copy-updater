@@ -30,7 +30,10 @@ export function ConfirmDeleteButton({
     return (
       <button
         type="button"
-        onClick={() => setConfirming(true)}
+        onClick={() => {
+          setError(null);
+          setConfirming(true);
+        }}
         className={
           quiet
             ? "text-[11px] text-[var(--color-ink-faint)] hover:text-[var(--color-removed)]"
@@ -54,8 +57,9 @@ export function ConfirmDeleteButton({
               await onConfirm();
               router.refresh();
             } catch (e) {
+              // Stay armed: the error message lives in this branch, so
+              // disarming here would report the failure to nobody.
               setError(e instanceof Error ? e.message : String(e));
-              setConfirming(false);
             }
           })
         }

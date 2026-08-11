@@ -16,6 +16,7 @@ import {
   buildSystemPrompt,
   buildUserPrompt,
   neighboursFor,
+  pageSummaryFor,
   type PromptShape,
 } from "./prompt";
 
@@ -233,7 +234,13 @@ export async function generateSuggestions(
     });
 
   const system = buildSystemPrompt(input.mode);
-  const context = neighboursFor(input.allBlocks, scope);
+  // Meta requests have no scope to take neighbours around, and asking for a
+  // description "faithful to what the page offers" while showing none of the
+  // page gets an answer written from the brief and the URL alone.
+  const context =
+    input.scopeKind === "meta"
+      ? pageSummaryFor(input.allBlocks)
+      : neighboursFor(input.allBlocks, scope);
   const temperature = TEMPERATURE_BY_SHAPE[input.shape];
 
   const promptFor = (angle: string | null) =>

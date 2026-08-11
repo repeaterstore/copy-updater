@@ -9,10 +9,15 @@
  * "0 versions" for pages that had several.
  */
 import { count, desc } from "drizzle-orm";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { PgDatabase, PgQueryResultHKT } from "drizzle-orm/pg-core";
 import * as schema from "@/db/schema";
 
-export type Database = NodePgDatabase<typeof schema>;
+/**
+ * The driver-agnostic base type, not NodePgDatabase: the tests run this against
+ * PGlite, and naming the node-postgres driver would force a cast there that
+ * turns off type checking on the one call the test exists to check.
+ */
+export type Database = PgDatabase<PgQueryResultHKT, typeof schema>;
 
 export interface PageListRow {
   id: string;

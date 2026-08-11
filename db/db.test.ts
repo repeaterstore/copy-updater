@@ -194,8 +194,7 @@ test("home listing counts versions and reports the latest snapshot status", asyn
   await db.insert(schema.snapshots)
     .values({ pageId: empty.id, status: "pending", capturedAt: new Date("2026-02-01") });
 
-  // PGlite speaks real Postgres; the cast is only for the driver type.
-  const rows = await listPagesWithStats(db as never);
+  const rows = await listPagesWithStats(db);
   const a = rows.find((r) => r.id === withVersions.id);
   const b = rows.find((r) => r.id === empty.id);
 
