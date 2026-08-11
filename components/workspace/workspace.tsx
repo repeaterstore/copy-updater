@@ -21,7 +21,13 @@ import type { VersionStatus } from "@/db/schema";
 import { orderByLineage, SNAPSHOT_BASELINE, type LineageRow } from "@/lib/version-tree";
 import { AiPanel, type AiConfig } from "./ai-panel";
 import { CommentPanel, type CommentItem } from "./comment-panel";
-import { DeviceToggle, PreviewPane, type Device } from "./preview-pane";
+import {
+  DeviceToggle,
+  PHONE_ZOOMS,
+  phonePaneWidth,
+  PreviewPane,
+  type Device,
+} from "./preview-pane";
 import { InspectorPane } from "./inspector-pane";
 import { OutlinePane } from "./outline-pane";
 
@@ -146,12 +152,24 @@ export function Workspace({
   /**
    * The phone shown beside the desktop frame.
    *
-   * Deliberately handler-free and never editable: two editable frames would
-   * both post edits for the same block, and a click in one would fight the
-   * selection in the other. It mirrors what the primary frame shows.
+   * It takes the same handlers, so copy can be clicked and typed on either
+   * frame. Only the focused frame receives key events, so only it reports an
+   * edit; the other simply has the resulting op applied to it like any other
+   * change. Each hook ignores messages that did not come from its own window.
    */
-  const companion = usePreviewFrame({});
+  const companion = usePreviewFrame({
+    onBlockClicked: (id) => {
+      if (!derivedByIdRef.current.has(id)) return;
+      setSelectedId(id);
+      setPane("inspector");
+    },
+    onBlockEdited: (id, html) => upsertText(id, html),
+    onApplyFailures: (failures) =>
+      setProblems(failures.map((f) => `${f.id || "(unknown)"}: ${f.reason}`)),
+  });
   const showCompanion = device === "both";
+  /** Life size by default; the pane widens and narrows with this. */
+  const [phoneZoom, setPhoneZoom] = useState(1);
 
   /**
    * Once the phone has been asked for, keep it mounted and just hide it.
@@ -213,8 +231,9 @@ export function Workspace({
   useEffect(() => {
     // Never editable while the previous wording is on screen: a keystroke there
     // would be recorded as an edit to text this version had already replaced.
-    frame.setEditable(editMode && !readOnly && !showingBefore);
-    if (showCompanion) companion.setEditable(false);
+    const on = editMode && !readOnly && !showingBefore;
+    frame.setEditable(on);
+    if (showCompanion) companion.setEditable(on);
   }, [editMode, readOnly, showingBefore, frame, companion, showCompanion]);
 
   /** Unresolved comments per block. Resolved ones are deliberately excluded. */
@@ -411,6 +430,8 @@ export function Workspace({
         editMode={editMode}
         device={device}
         onDevice={setDevice}
+        phoneZoom={phoneZoom}
+        onPhoneZoom={setPhoneZoom}
         hasBefore={hasBefore}
         showingBefore={showingBefore}
         onShowBefore={setShowingBefore}
@@ -512,34 +533,37 @@ export function Workspace({
           {/* The primary frame keeps its place in the tree whatever the device
               is, so switching modes never remounts it — a remount means
               re-downloading a snapshot that can run to tens of megabytes. */}
-          {/* Side by side once there is room for both at a readable size, and
-              stacked below that. Squeezed into the 640px this pane gets on a
-              1280px screen, a side-by-side desktop frame renders at 12% — small
-              enough that nobody could read the copy it is there to show. */}
-          <div className="flex h-full min-w-0 flex-col min-[1700px]:flex-row">
+          {/* Always side by side — reading the same copy at two widths is the
+              point, and stacked it turns into scrolling between them. The phone
+              zoom is what makes this fit: at 50% it leaves nearly the whole
+              pane to the desktop frame. */}
+          <div className="flex h-full min-w-0 flex-row">
             <div className="min-h-0 min-w-0 flex-1">
               <PreviewPane
                 frame={frame}
                 snapshotId={snapshotId}
                 runtimeVersion={runtimeVersion}
                 device={device === "both" ? "desktop" : device}
+                zoom={device === "mobile" ? phoneZoom : 1}
                 loading={!frame.ready}
               />
             </div>
             {companionMounted ? (
-              // 430px is the phone plus its bezel, so side by side it renders
-              // at 1:1. Stacked, it takes the full width and a fixed slice of
-              // the height, and scrolls within that.
+              // Exactly as wide as the phone needs at its current zoom, so the
+              // zoom control is what trades width between the two frames: at
+              // 50% the desktop frame gets nearly the whole pane back.
               <div
-                className={`h-[45%] min-h-0 w-full shrink-0 border-t border-[var(--color-line)] min-[1700px]:h-full min-[1700px]:w-[430px] min-[1700px]:border-l min-[1700px]:border-t-0 ${
+                className={`h-full min-h-0 shrink-0 border-l border-[var(--color-line)] ${
                   showCompanion ? "" : "hidden"
                 }`}
+                style={{ width: phonePaneWidth(phoneZoom) }}
               >
                 <PreviewPane
                   frame={companion}
                   snapshotId={snapshotId}
                   runtimeVersion={runtimeVersion}
                   device="mobile"
+                  zoom={phoneZoom}
                   loading={!companion.ready}
                 />
               </div>
@@ -787,6 +811,8 @@ function Toolbar({
   baselineName,
   device,
   onDevice,
+  phoneZoom,
+  onPhoneZoom,
   onDiffMode,
   onEditMode,
   onSave,
@@ -811,6 +837,8 @@ function Toolbar({
   baselineName: string;
   device: Device;
   onDevice: (d: Device) => void;
+  phoneZoom: number;
+  onPhoneZoom: (zoom: number) => void;
   onDiffMode: (on: boolean) => void;
   onEditMode: (on: boolean) => void;
   onSave: () => void;
@@ -914,6 +942,25 @@ function Toolbar({
           />
         ) : null}
         <DeviceToggle device={device} onChange={onDevice} />
+        {device === "desktop" ? null : (
+          <label
+            className="flex items-center gap-1 text-[11px] text-[var(--color-ink-soft)]"
+            title="How large to draw the phone. Smaller leaves more room for the desktop frame beside it."
+          >
+            Phone
+            <select
+              className="field w-auto py-0.5 text-xs"
+              value={phoneZoom}
+              onChange={(e) => onPhoneZoom(Number(e.target.value))}
+            >
+              {PHONE_ZOOMS.map((z) => (
+                <option key={z} value={z}>
+                  {Math.round(z * 100)}%
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
 
         <ExportMenu versionId={version.id} compareVersionId={compareVersionId} />
 
