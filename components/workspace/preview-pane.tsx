@@ -9,15 +9,6 @@ export type Device = "desktop" | "mobile" | "both";
 const WIDTHS: Record<Exclude<Device, "both">, number> = { desktop: 1440, mobile: 390 };
 
 /**
- * Room for the phone alongside the desktop frame.
- *
- * Fixed rather than a fraction: at 390px plus its bezel the phone renders
- * near 1:1, which is the whole point of looking at it, and the desktop frame
- * takes whatever is left and scales into it.
- */
-export const COMPANION_WIDTH = 430;
-
-/**
  * The snapshot iframe, rendered at a real device width and scaled to fit.
  *
  * Scaling rather than resizing matters: the snapshot's own media queries key

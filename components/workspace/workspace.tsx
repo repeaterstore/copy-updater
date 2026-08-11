@@ -21,7 +21,7 @@ import type { VersionStatus } from "@/db/schema";
 import { orderByLineage, SNAPSHOT_BASELINE, type LineageRow } from "@/lib/version-tree";
 import { AiPanel, type AiConfig } from "./ai-panel";
 import { CommentPanel, type CommentItem } from "./comment-panel";
-import { COMPANION_WIDTH, DeviceToggle, PreviewPane, type Device } from "./preview-pane";
+import { DeviceToggle, PreviewPane, type Device } from "./preview-pane";
 import { InspectorPane } from "./inspector-pane";
 import { OutlinePane } from "./outline-pane";
 
@@ -48,6 +48,7 @@ export function Workspace({
   baselineBlocks,
   baselineMeta,
   compareVersionId,
+  baselineOps,
   aiConfig,
   comments,
 }: {
@@ -60,6 +61,8 @@ export function Workspace({
   baselineBlocks: Block[];
   baselineMeta: PageMeta;
   compareVersionId: string | null;
+  /** Ops that turn the snapshot into the baseline; replayed while Before is held. */
+  baselineOps: Op[];
   aiConfig: AiConfig;
   // Plain data, not a render prop: functions cannot cross the server/client
   // boundary, so the panels are composed here rather than passed in.
@@ -151,21 +154,17 @@ export function Workspace({
   const showCompanion = device === "both";
 
   /**
-   * The wording this version is being compared against, as ops.
+   * Once the phone has been asked for, keep it mounted and just hide it.
    *
-   * Held down, "Before" swaps these in so the reviewer can flick between the
-   * proposal and what it replaced in place, on the page, rather than reading
-   * two columns of text in the inspector. Built from the changed blocks only,
-   * since applying an op for every block on the page would replay a thousand
-   * of them to change nothing.
+   * Unmounting it would throw away a loaded snapshot that can run to tens of
+   * megabytes, so every trip through the device toggle would re-download and
+   * re-parse the whole page.
    */
-  const baselineOps = useMemo<Op[]>(
-    () =>
-      derived
-        .filter((d) => d.changed)
-        .map((d) => ({ t: "setText", id: d.block.id, html: d.block.html })),
-    [derived],
-  );
+  const [companionMounted, setCompanionMounted] = useState(false);
+  useEffect(() => {
+    if (showCompanion) setCompanionMounted(true);
+  }, [showCompanion]);
+
   const [showingBefore, setShowingBefore] = useState(false);
 
   // Releasing outside the button, or losing the window mid-hold, must not leave
@@ -392,6 +391,8 @@ export function Workspace({
     ? derivedById.get(selectedId) ?? null
     : null;
   const changedCount = derived.filter((d) => d.changed).length + (metaChanged ? 1 : 0);
+  /** Something to compare: reworded copy, or structure this version adds. */
+  const hasBefore = changedCount > 0 || pending.length > 0;
 
   return (
     <div className="flex h-[calc(100vh-3rem)] flex-col">
@@ -410,6 +411,7 @@ export function Workspace({
         editMode={editMode}
         device={device}
         onDevice={setDevice}
+        hasBefore={hasBefore}
         showingBefore={showingBefore}
         onShowBefore={setShowingBefore}
         baselineName={parentLabel ?? "the live page"}
@@ -418,6 +420,15 @@ export function Workspace({
         onSave={save}
         onStatus={(status) =>
           startSaving(async () => {
+            // Commit any pending edit first. Autosave runs two seconds after
+            // the last keystroke, and approving inside that window used to
+            // freeze the previous wording: the version became read-only, which
+            // stopped autosave, and the edit was gone on the next load.
+            const snapshot = ops;
+            if (dirty) {
+              await saveOpsAction(version.id, snapshot);
+              setSavedOps(snapshot);
+            }
             await setVersionStatusAction(version.id, status);
             router.refresh();
           })
@@ -501,7 +512,11 @@ export function Workspace({
           {/* The primary frame keeps its place in the tree whatever the device
               is, so switching modes never remounts it — a remount means
               re-downloading a snapshot that can run to tens of megabytes. */}
-          <div className="flex h-full min-w-0">
+          {/* Side by side once there is room for both at a readable size, and
+              stacked below that. Squeezed into the 640px this pane gets on a
+              1280px screen, a side-by-side desktop frame renders at 12% — small
+              enough that nobody could read the copy it is there to show. */}
+          <div className="flex h-full min-w-0 flex-col min-[1700px]:flex-row">
             <div className="min-h-0 min-w-0 flex-1">
               <PreviewPane
                 frame={frame}
@@ -511,10 +526,14 @@ export function Workspace({
                 loading={!frame.ready}
               />
             </div>
-            {device === "both" ? (
+            {companionMounted ? (
+              // 430px is the phone plus its bezel, so side by side it renders
+              // at 1:1. Stacked, it takes the full width and a fixed slice of
+              // the height, and scrolls within that.
               <div
-                className="min-h-0 shrink-0 border-l border-[var(--color-line)]"
-                style={{ width: COMPANION_WIDTH }}
+                className={`h-[45%] min-h-0 w-full shrink-0 border-t border-[var(--color-line)] min-[1700px]:h-full min-[1700px]:w-[430px] min-[1700px]:border-l min-[1700px]:border-t-0 ${
+                  showCompanion ? "" : "hidden"
+                }`}
               >
                 <PreviewPane
                   frame={companion}
@@ -762,6 +781,7 @@ function Toolbar({
   readOnly,
   diffMode,
   editMode,
+  hasBefore,
   showingBefore,
   onShowBefore,
   baselineName,
@@ -784,6 +804,7 @@ function Toolbar({
   readOnly: boolean;
   diffMode: boolean;
   editMode: boolean;
+  hasBefore: boolean;
   showingBefore: boolean;
   onShowBefore: (on: boolean) => void;
   /** What the diff is against, named, for the Before button's tooltip. */
@@ -885,7 +906,7 @@ function Toolbar({
             Edit on page
           </button>
         ) : null}
-        {changedCount > 0 ? (
+        {hasBefore ? (
           <BeforeButton
             active={showingBefore}
             onChange={onShowBefore}

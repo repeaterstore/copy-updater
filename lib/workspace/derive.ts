@@ -230,8 +230,15 @@ interface Group {
 function splitInto(blocks: DerivedBlock[], depth: number): Group[] {
   const groups: Group[] = [];
   for (const derived of blocks) {
-    const key = containerAt(derived.block, depth);
     const last = groups[groups.length - 1];
+    // A block inserted by an op is identified as `new:<id>` and has no
+    // structural path, so there is no container to group it by. It belongs
+    // where it sits — with the band it was inserted into, not as a band of its
+    // own, which is what one group per inserted bullet would look like.
+    const key = derived.block.id.includes("/")
+      ? containerAt(derived.block, depth)
+      : (last?.key ?? derived.block.id);
+
     if (last && last.key === key) last.blocks.push(derived);
     else groups.push({ key, depth, blocks: [derived] });
   }
@@ -291,17 +298,28 @@ function bandsOf(blocks: DerivedBlock[]): { group: Group; chrome: ChromeKind | n
   return bands;
 }
 
-/** The heading that names a band, or its opening line if it has no heading. */
-function labelFor(group: Group): string {
+/**
+ * The heading that names a band, or its opening line if it has no heading.
+ *
+ * Returns which block supplied the name as well, because that block must not
+ * then open a subsection of the band it just named — a band whose heading is
+ * preceded by an eyebrow line read as "Heading > Heading".
+ */
+function labelFor(group: Group): { label: string; fromId: string | null } {
   const visible = group.blocks.filter((d) => isVisible(d.block));
   const usable = visible.length > 0 ? visible : group.blocks;
+
   const heading = usable.find((d) => d.block.role === "heading");
-  if (heading) return heading.text || heading.block.text;
+  if (heading) {
+    return { label: heading.text || heading.block.text, fromId: heading.block.id };
+  }
+
   // Most marketing bands have no heading element at all — the eyebrow or lead
   // line is styled as one. It names the band better than "Section 4" does.
   const lead = usable.find((d) => d.text.trim().length > 12) ?? usable[0];
   const text = lead?.text.trim() ?? "";
-  return text ? (text.length > 48 ? `${text.slice(0, 47)}…` : text) : UNTITLED;
+  const label = text ? (text.length > 48 ? `${text.slice(0, 47)}…` : text) : UNTITLED;
+  return { label, fromId: null };
 }
 
 /**
@@ -365,14 +383,18 @@ export function groupIntoSections(blocks: DerivedBlock[]): Section[] {
       return;
     }
 
-    const band = makeSection(group.blocks[0], labelFor(group), 2, [], chrome);
+    const named = labelFor(group);
+    const band = makeSection(group.blocks[0], named.label, 2, [], chrome);
     roots.push(band);
 
-    // Subsections within the band. The band's own label already came from its
-    // first heading, so that heading does not open a child of itself.
+    // Subsections within the band. Whichever block supplied the band's name is
+    // skipped, so it does not open a child section repeating that name.
     const stack: Section[] = [band];
     for (const derived of group.blocks.slice(1)) {
-      const opens = derived.block.role === "heading" && isVisible(derived.block);
+      const opens =
+        derived.block.role === "heading" &&
+        isVisible(derived.block) &&
+        derived.block.id !== named.fromId;
       if (opens) {
         const level = Math.max(headingLevel(derived.block), band.level + 1);
         while (stack.length > 1 && stack[stack.length - 1].level >= level) stack.pop();

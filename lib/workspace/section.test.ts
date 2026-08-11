@@ -8,6 +8,7 @@ import {
   deriveBlocks,
   type DerivedBlock,
   groupIntoSections,
+  sectionBlocks,
   sectionScopeFor,
 } from "./derive";
 import type { Block } from "@/lib/ops/types";
@@ -244,4 +245,50 @@ test("a long list is not carved into one group per row", () => {
   const sections = groupIntoSections(derived);
   assert.equal(sections.length, 1);
   assert.equal(sections[0].label, "Big grid");
+});
+
+test("grouping survives degenerate input", () => {
+  assert.deepEqual(groupIntoSections([]), []);
+
+  const one = deriveBlocks(
+    withBoxes(blocksOf(`<!doctype html><html><body><p>Alone.</p></body></html>`), () => true),
+    [],
+  );
+  const sections = groupIntoSections(one);
+  assert.equal(sections.length, 1);
+  assert.equal(sections[0].label, "Alone.");
+  assert.equal(sections[0].blocks.length, 1);
+});
+
+test("blocks inserted by an op join the band they sit in", () => {
+  const page = `<!doctype html><html><body>
+    <section><h2>Warranty</h2><ul><li>Two years</li></ul></section>
+  </body></html>`;
+  const blocks = withBoxes(blocksOf(page), () => true);
+  // What an insert op produces: no structural path, so no container to group by.
+  const inserted: Block[] = [
+    { ...blocks[blocks.length - 1], id: "new:aaaaaa", html: "Free returns", text: "Free returns" },
+    { ...blocks[blocks.length - 1], id: "new:bbbbbb", html: "Free shipping", text: "Free shipping" },
+  ];
+  const derived = deriveBlocks([...blocks, ...inserted], []);
+  const sections = groupIntoSections(derived);
+
+  // One band, not one per inserted bullet.
+  assert.equal(sections.length, 1);
+  const texts = sectionBlocks(sections[0]).map((d) => d.text);
+  assert.ok(texts.includes("Free returns"));
+  assert.ok(texts.includes("Free shipping"));
+});
+
+test("a band whose heading follows an eyebrow is not named twice", () => {
+  const page = `<!doctype html><html><body>
+    <section><p>WHY WAVEFORM</p><h2>Coverage that holds</h2><p>Body copy.</p></section>
+  </body></html>`;
+  const derived = deriveBlocks(withBoxes(blocksOf(page), () => true), []);
+  const sections = groupIntoSections(derived);
+
+  assert.equal(sections.length, 1);
+  assert.equal(sections[0].label, "Coverage that holds");
+  // The heading names the band; it must not then open a child repeating it.
+  assert.deepEqual(sections[0].children, []);
 });

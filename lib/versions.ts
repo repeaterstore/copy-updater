@@ -27,8 +27,15 @@ const EMPTY_RESOLVED: Resolved = {
   styles: [],
 };
 
-/** Skeletons are immutable per snapshot, so cache them for the process. */
+/**
+ * Skeletons are immutable per snapshot, so cache them for the process.
+ *
+ * Bounded for the same reason as the resolved cache below: a skeleton runs to
+ * well over a megabyte, and a long-lived container that has served every page
+ * on the site should not be holding all of them.
+ */
 const skeletonCache = new Map<string, string>();
+const SKELETON_CACHE_LIMIT = 8;
 
 export async function loadSkeleton(snapshot: SnapshotRow): Promise<string> {
   if (!snapshot.skeletonPath) {
@@ -38,6 +45,10 @@ export async function loadSkeleton(snapshot: SnapshotRow): Promise<string> {
   if (cached) return cached;
 
   const text = await readDataText(snapshot.skeletonPath);
+  if (skeletonCache.size >= SKELETON_CACHE_LIMIT) {
+    const oldest = skeletonCache.keys().next().value;
+    if (oldest) skeletonCache.delete(oldest);
+  }
   skeletonCache.set(snapshot.id, text);
   return text;
 }

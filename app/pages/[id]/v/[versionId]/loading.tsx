@@ -18,8 +18,10 @@ export default function Loading() {
         <div className="ml-auto h-4 w-28 rounded bg-[var(--color-sunken)]" />
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[280px_minmax(0,1fr)_360px]">
-        <div className="space-y-2 border-r border-[var(--color-line)] p-3">
+      {/* Same grid and the same breakpoint as the workspace itself, so the real
+          panes land exactly where the placeholders were rather than jumping. */}
+      <div className="grid min-h-0 flex-1 xl:grid-cols-[17rem_minmax(0,1fr)_22rem]">
+        <div className="hidden space-y-2 border-r border-[var(--color-line)] p-3 xl:block">
           <div className="h-7 rounded bg-[var(--color-sunken)]" />
           {Array.from({ length: 9 }, (_, i) => (
             <div
@@ -35,7 +37,7 @@ export default function Loading() {
           <div className="h-full w-full max-w-3xl rounded-lg bg-[var(--color-sunken)]" />
         </div>
 
-        <div className="space-y-3 border-l border-[var(--color-line)] p-3">
+        <div className="hidden space-y-3 border-l border-[var(--color-line)] p-3 xl:block">
           <div className="h-3 w-24 rounded bg-[var(--color-sunken)]" />
           <div className="h-16 rounded bg-[var(--color-sunken)]" />
           <div className="h-3 w-20 rounded bg-[var(--color-sunken)]" />

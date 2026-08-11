@@ -40,15 +40,31 @@ export function usePreviewFrame(handlers: PreviewFrameHandlers): PreviewFrameApi
   const queue = useRef<HostMessage[]>([]);
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
-  const readyRef = useRef(false);
+  /**
+   * The window we have seen announce itself, not a boolean.
+   *
+   * An iframe that unmounts and comes back — the mobile companion, every time
+   * the device toggle leaves "both" and returns — gets a brand new document.
+   * A boolean stayed true across that, so messages went out to a document that
+   * had not yet installed its listener and were silently dropped: the phone sat
+   * there showing the untouched page while the desktop frame showed the edits.
+   */
+  const readyWindow = useRef<Window | null>(null);
 
   const send = useCallback((message: HostMessage) => {
-    const frame = ref.current;
-    if (!readyRef.current || !frame?.contentWindow) {
-      queue.current.push(message);
+    const target = ref.current?.contentWindow ?? null;
+    if (!target || readyWindow.current !== target) {
+      // Every message carries complete state — the whole op list, the whole
+      // highlight set — so a queued one is worth nothing once a newer one of
+      // the same kind arrives. Replacing rather than appending keeps the queue
+      // at one entry per kind; appending meant a frame that never became ready
+      // accumulated a full op list per keystroke.
+      const superseded = queue.current.findIndex((m) => m.type === message.type);
+      if (superseded === -1) queue.current.push(message);
+      else queue.current[superseded] = message;
       return;
     }
-    frame.contentWindow.postMessage(message, "*");
+    target.postMessage(message, "*");
   }, []);
 
   /**
@@ -62,14 +78,13 @@ export function usePreviewFrame(handlers: PreviewFrameHandlers): PreviewFrameApi
    * The iframe's own load event is the backstop; both paths are idempotent.
    */
   const markReady = useCallback(() => {
-    if (readyRef.current) return;
-    readyRef.current = true;
+    const target = ref.current?.contentWindow ?? null;
+    if (!target || readyWindow.current === target) return;
+    readyWindow.current = target;
     setReady(true);
     const pending = queue.current;
     queue.current = [];
-    for (const queued of pending) {
-      ref.current?.contentWindow?.postMessage(queued, "*");
-    }
+    for (const queued of pending) target.postMessage(queued, "*");
   }, []);
 
   useEffect(() => {

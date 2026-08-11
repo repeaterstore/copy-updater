@@ -9,10 +9,20 @@ import { loadSettings } from "@/lib/ai/openrouter";
 import { listBrandVoices } from "@/lib/ai/voices";
 import { browserScriptHash } from "@/lib/browser/bundle";
 import { requireUser } from "@/lib/session";
+import type { Op } from "@/lib/ops/types";
 import { SNAPSHOT_BASELINE } from "@/lib/version-tree";
 import { baselineFor, listVersions, snapshotBaseline } from "@/lib/versions";
 
 export const dynamic = "force-dynamic";
+
+/** A root version's baseline is the bare snapshot, so it has no ops. */
+async function parentOps(version: { parentVersionId: string | null }): Promise<Op[]> {
+  if (!version.parentVersionId) return [];
+  const parent = await db.query.versions.findFirst({
+    where: eq(schema.versions.id, version.parentVersionId),
+  });
+  return parent?.ops ?? [];
+}
 
 export default async function VersionWorkspace({
   params,
@@ -40,6 +50,15 @@ export default async function VersionWorkspace({
   // explicitly chosen version, otherwise its parent, otherwise the capture.
   const compareId = compare && compare !== "" ? compare : null;
   let baseline;
+  /**
+   * The ops that produce the baseline from the snapshot.
+   *
+   * The workspace replays these when "Before" is held. Deriving them in the
+   * browser from the baseline blocks is not possible: it can only see which
+   * blocks *this* version changed, so a fork's Before would show its parent's
+   * wording for those and the untouched page everywhere else.
+   */
+  let baselineOps: Op[] = [];
   if (compareId === SNAPSHOT_BASELINE) {
     baseline = await snapshotBaseline(version.snapshotId);
   } else if (compareId) {
@@ -47,8 +66,10 @@ export default async function VersionWorkspace({
       where: eq(schema.versions.id, compareId),
     });
     baseline = other?.resolved ?? (await baselineFor(version));
+    baselineOps = other?.resolved ? other.ops : await parentOps(version);
   } else {
     baseline = await baselineFor(version);
+    baselineOps = await parentOps(version);
   }
 
   const rows = await listVersions(pageId);
@@ -112,6 +133,7 @@ export default async function VersionWorkspace({
         baselineBlocks={baseline.blocks}
         baselineMeta={baseline.meta}
         compareVersionId={compareId}
+        baselineOps={baselineOps}
         aiConfig={{
           configured: Boolean(settings?.openrouterKeyEncrypted),
           models: settings?.models ?? [],

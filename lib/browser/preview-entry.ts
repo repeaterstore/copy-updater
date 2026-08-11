@@ -182,11 +182,21 @@ function capturePristine(): void {
   }
 }
 
+/**
+ * Blocks the typist has touched directly.
+ *
+ * Only these can have drifted from snapshot + ops, so only these need checking.
+ * Scanning all of them instead would mean serialising a thousand subtrees on
+ * every apply, and applies happen while someone is typing.
+ */
+const typedInto = new Set<string>();
+
 /** Undo anything typed straight into the page, which no op list accounts for. */
 function restorePristine(): void {
-  for (const [id, html] of pristineHtml) {
+  for (const id of typedInto) {
+    const html = pristineHtml.get(id);
     const el = byId(id);
-    if (el && el.innerHTML !== html) el.innerHTML = html;
+    if (html !== undefined && el && el.innerHTML !== html) el.innerHTML = html;
   }
 }
 
@@ -223,6 +233,11 @@ function setEditable(on: boolean): void {
  * than a node and offset, because the nodes themselves do not survive.
  */
 function captureCaret(): { id: string; offset: number } | null {
+  // A document keeps its activeElement even when the user has moved on to
+  // something outside it, so without this the restore could pull focus out of
+  // the inspector and into the preview while someone was typing in the panel.
+  if (!document.hasFocus()) return null;
+
   const selection = document.getSelection();
   if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) return null;
 
@@ -239,10 +254,22 @@ function captureCaret(): { id: string; offset: number } | null {
   const id = block.getAttribute(ID_ATTR);
   if (!id) return null;
 
-  const range = document.createRange();
-  range.selectNodeContents(block);
-  range.setEnd(anchor!, selection.anchorOffset);
-  return { id, offset: range.toString().length };
+  // Counted by walking text nodes, the same way the restore walks them.
+  // Range.toString() looked simpler and is not symmetric: it skips <br> and
+  // <img>, which are legal inside an editable block, so a caret after one would
+  // come back short by however many the block contained.
+  const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+  let offset = 0;
+  let node = walker.nextNode() as Text | null;
+  while (node) {
+    if (node === anchor) return { id, offset: offset + selection.anchorOffset };
+    offset += node.data.length;
+    node = walker.nextNode() as Text | null;
+  }
+
+  // The caret sits on the element itself rather than in a text node — after the
+  // last child, typically. Land at the end.
+  return { id, offset };
 }
 
 function restoreCaret(saved: { id: string; offset: number }): void {
@@ -288,6 +315,7 @@ function watchEdits(): void {
     if (!target) return;
     const id = target.getAttribute(ID_ATTR);
     if (!id) return;
+    typedInto.add(id);
 
     clearTimeout(pendingEdits.get(id));
     pendingEdits.set(
@@ -402,9 +430,30 @@ function handle(message: HostMessage): void {
   switch (message.type) {
     case "applyOps": {
       const caret = captureCaret();
+      /*
+       * Text typed since the last post, which the incoming list cannot contain.
+       *
+       * An edit is only reported 400ms after the last keystroke, and an apply
+       * lands about 180ms after that — so anyone still typing has characters in
+       * the DOM that the host has never seen. Restoring and replaying would
+       * throw them away, and the pending post would then report the replayed
+       * text as if the typist had written it: keystrokes silently vanishing
+       * mid-sentence.
+       */
+      const inFlight = new Map<string, string>();
+      for (const id of pendingEdits.keys()) {
+        const el = byId(id);
+        if (el) inFlight.set(id, el.innerHTML);
+      }
+
       revertApplied();
       const result = applyWithUndo(document, message.ops);
       undoJournal = result.undo;
+
+      for (const [id, html] of inFlight) {
+        const el = byId(id);
+        if (el && el.innerHTML !== html) el.innerHTML = html;
+      }
       if (editable) setEditable(true);
       paintDiff();
       // After setEditable, so the block is contenteditable again before focus

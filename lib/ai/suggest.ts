@@ -315,7 +315,12 @@ export async function generateSuggestions(
     if (!result) throw lastError ?? new Error("No result generated.");
     const produced = angle ? result.object.options.slice(0, 1) : result.object.options;
     return produced.map((option) =>
-      validateOption(option as { label: string; rationale: string; ops: FlatOp[] }, scopeIds, input.mode),
+      validateOption(
+        option as { label: string; rationale: string; ops: FlatOp[] },
+        scopeIds,
+        input.mode,
+        input.scopeKind,
+      ),
     );
   };
 
@@ -371,6 +376,7 @@ function validateOption(
   option: { label: string; rationale: string; ops: FlatOp[] },
   scopeIds: Set<string>,
   mode: AiMode,
+  scopeKind: SuggestInput["scopeKind"],
 ): SuggestOption {
   const dom = new JSDOM("<!doctype html><body></body>");
   const doc = dom.window.document;
@@ -381,6 +387,13 @@ function validateOption(
   for (const flat of option.ops) {
     if (mode === "copy" && flat.t !== "setText" && flat.t !== "setMeta") {
       rejected.push({ reason: `"${flat.t}" is not allowed in copy mode` });
+      continue;
+    }
+    // A meta request has no blocks in scope, so the id checks below cannot
+    // catch anything: addStyle names no block and would otherwise sail through
+    // in layout mode, letting "rewrite the title" quietly add page CSS.
+    if (scopeKind === "meta" && flat.t !== "setMeta") {
+      rejected.push({ reason: `"${flat.t}" is not allowed in a meta-only request` });
       continue;
     }
 
