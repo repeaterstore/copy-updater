@@ -188,8 +188,10 @@ export const aiRuns = pgTable(
     reasoningLevel: text("reasoning_level").$type<ReasoningLevel>(),
     /** Whether the request was allowed to search the web. */
     webSearch: boolean("web_search").notNull().default(false),
-    /** Whether each option came from its own call with an assigned angle. */
+    /** Legacy: one call per option with an assigned angle. Replaced by allModels. */
     distinctOptions: boolean("distinct_options").notNull().default(false),
+    /** Whether every configured model was asked, rather than just one. */
+    allModels: boolean("all_models").notNull().default(false),
     /** Which blocks were in scope. */
     scope: jsonb("scope").$type<{ kind: string; blockIds: string[] }>(),
     instructions: text("instructions"),
@@ -199,7 +201,7 @@ export const aiRuns = pgTable(
      */
     brandVoice: text("brand_voice"),
     options: jsonb("options").$type<
-      { label: string; rationale: string; ops: Op[] }[]
+      { label: string; rationale: string; ops: Op[]; model?: string }[]
     >().notNull().default([]),
     chosenOption: integer("chosen_option"),
     error: text("error"),

@@ -24,6 +24,8 @@ export interface SuggestOption {
   label: string;
   rationale: string;
   ops: Op[];
+  /** Which model wrote it, when several were asked. */
+  model?: string;
   /** Ops the model produced that were rejected, and why. */
   rejected: { reason: string }[];
 }
@@ -33,8 +35,12 @@ export interface SuggestInput {
   fallbackModels?: string[];
   reasoningLevel: ReasoningLevel;
   webSearch: boolean;
-  /** Generate each option in its own call, with a distinct angle assigned. */
-  distinctOptions: boolean;
+  /** Ask every configured model rather than just the chosen one. */
+  allModels: boolean;
+  /** Every model the team has configured, for allModels. */
+  models: string[];
+  /** Aborts the in-flight provider calls when the reviewer stops waiting. */
+  abortSignal?: AbortSignal;
   mode: AiMode;
   shape: PromptShape;
   instructions: string | null;
@@ -64,22 +70,6 @@ const TEMPERATURE_BY_SHAPE: Record<PromptShape, number> = {
   directives: 0.25,
   optimize: 0.85,
 };
-
-/**
- * Angles assigned one per call when distinct options are requested.
- *
- * Asking a single call for three options reliably returns three rewordings of
- * one idea — the model anchors on its first thought. Separate calls with an
- * explicit, different angle each is what actually produces options worth
- * choosing between. It costs N× as much, hence the toggle.
- */
-const ANGLES = [
-  "Lead with the single clearest benefit, in the plainest possible language.",
-  "Lead with the objection or doubt a sceptical buyer arrives with, and answer it.",
-  "Lead with concrete specifics — numbers, names, outcomes — over adjectives.",
-  "Lead with the outcome the reader wants, written as the result they get.",
-  "Lead with what makes this different from the obvious alternative.",
-];
 
 /**
  * Flat wire shape for an op, deliberately not a discriminated union.
@@ -225,9 +215,9 @@ export async function generateSuggestions(
   // dead end.
   const ignoreProviders: string[] = [];
 
-  const buildCurrentModel = () =>
+  const buildCurrentModel = (modelId: string) =>
     buildModel({
-      modelId: input.modelId,
+      modelId,
       fallbackModels: input.fallbackModels,
       reasoningLevel: input.reasoningLevel,
       webSearch: input.webSearch,
@@ -244,7 +234,7 @@ export async function generateSuggestions(
       : neighboursFor(input.allBlocks, scope);
   const temperature = TEMPERATURE_BY_SHAPE[input.shape];
 
-  const promptFor = (angle: string | null) =>
+  const prompt =
     buildUserPrompt({
       pageUrl: input.pageUrl,
       pageName: input.pageName,
@@ -253,19 +243,19 @@ export async function generateSuggestions(
       mode: input.mode,
       shape: input.shape,
       instructions: input.instructions,
-      optionCount: angle ? 1 : input.optionCount,
+      optionCount: input.optionCount,
       meta: input.meta,
       scope,
       context,
       cssIndex: input.cssIndex,
-      angle,
+      angle: null,
       webSearch: input.webSearch,
       scopeKind: input.scopeKind,
       sectionLabel: input.sectionLabel,
     });
 
-  const run = async (angle: string | null): Promise<SuggestOption[]> => {
-    const schema = optionSchema(input.mode, angle !== null);
+  const run = async (modelId: string): Promise<SuggestOption[]> => {
+    const schema = optionSchema(input.mode, false);
 
     /*
      * Degrade toward getting a valid answer rather than failing in front of a
@@ -293,15 +283,19 @@ export async function generateSuggestions(
     for (const [index, attempt] of attempts.entries()) {
       try {
         result = await generateObject({
-          model: await buildCurrentModel(),
+          model: await buildCurrentModel(modelId),
           schema,
           system,
-          messages: buildMessages(promptFor(angle), input.screenshot),
+          messages: buildMessages(prompt, input.screenshot),
+          abortSignal: input.abortSignal,
           ...(attempt.temperature !== undefined ? { temperature: attempt.temperature } : {}),
         });
         break;
       } catch (error) {
         lastError = error;
+        // A cancelled request is not a routing problem; stop rather than
+        // burning the remaining attempts on a reviewer who has walked away.
+        if (input.abortSignal?.aborted) throw error;
         if (!isParameterRoutingError(error)) throw error;
 
         // Record on every failure, not just the last — otherwise the exclusion
@@ -313,8 +307,7 @@ export async function generateSuggestions(
       }
     }
     if (!result) throw lastError ?? new Error("No result generated.");
-    const produced = angle ? result.object.options.slice(0, 1) : result.object.options;
-    return produced.map((option) =>
+    return result.object.options.map((option) =>
       validateOption(
         option as { label: string; rationale: string; ops: FlatOp[] },
         scopeIds,
@@ -324,14 +317,25 @@ export async function generateSuggestions(
     );
   };
 
-  if (!input.distinctOptions) {
-    return { modelId: input.modelId, options: await run(null) };
+  if (!input.allModels) {
+    return { modelId: input.modelId, options: await run(input.modelId) };
   }
 
-  // One call per angle, in parallel. A failed angle drops out rather than
-  // failing the whole request — two good options beat an error.
-  const angles = ANGLES.slice(0, input.optionCount);
-  const settled = await Promise.allSettled(angles.map((angle) => run(angle)));
+  /*
+   * One call per configured model, in parallel.
+   *
+   * Asking a single model for several options returns several rewordings of
+   * one idea — it anchors on its first thought. Different models do not share
+   * that anchor, so this is where genuinely different suggestions come from.
+   * A model that fails drops out rather than failing the request: three good
+   * options from two models beat an error from the third.
+   */
+  const models = input.models.length > 0 ? input.models : [input.modelId];
+  const settled = await Promise.allSettled(
+    models.map((modelId) =>
+      run(modelId).then((options) => options.map((option) => ({ ...option, model: modelId }))),
+    ),
+  );
   const options = settled.flatMap((result) =>
     result.status === "fulfilled" ? result.value : [],
   );
@@ -343,7 +347,7 @@ export async function generateSuggestions(
       : new Error("No options were generated.");
   }
 
-  return { modelId: input.modelId, options };
+  return { modelId: models.join(", "), options };
 }
 
 function buildMessages(

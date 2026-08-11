@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { suggestAction, recordChosenOptionAction } from "@/app/actions/ai";
+import { useRef, useState, useTransition } from "react";
+import { recordChosenOptionAction } from "@/app/actions/ai";
 import type { AiMode } from "@/db/schema";
 import type { Op } from "@/lib/ops/types";
 import type { SuggestOption } from "@/lib/ai/suggest";
@@ -61,7 +61,7 @@ export function AiPanel({
   const [customVoice, setCustomVoice] = useState("");
   const [optionCount, setOptionCount] = useState(3);
   const [webSearch, setWebSearch] = useState(false);
-  const [distinctOptions, setDistinctOptions] = useState(false);
+  const [allModels, setAllModels] = useState(false);
   const [options, setOptions] = useState<SuggestOption[] | null>(null);
   const [runId, setRunId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -98,32 +98,62 @@ export function AiPanel({
   // the server enforces; here we just have to let the button be clickable.
   const metaScope = scope === "block" && !selectedBlockId;
 
+  /**
+   * Held so Stop can abort the request.
+   *
+   * The suggestion runs over fetch rather than as a server action precisely so
+   * it can be withdrawn: aborting here closes the connection, which fires
+   * request.signal on the server, which is passed down to the model call. The
+   * work actually stops rather than finishing unwatched and being billed for.
+   */
+  const inFlight = useRef<AbortController | null>(null);
+
   const run = () => {
     setError(null);
     setOptions(null);
+    const controller = new AbortController();
+    inFlight.current = controller;
+
     start(async () => {
-      const result = await suggestAction({
-        versionId,
-        model,
-        mode,
-        shape,
-        instructions: instructions.trim() || null,
-        optionCount,
-        scopeBlockIds: scopeIds,
-        scopeKind: metaScope ? "meta" : scope,
-        sectionLabel: scope === "section" ? (section?.label ?? null) : null,
-        webSearch,
-        distinctOptions,
-        brandVoiceId: voiceId === VOICE_CUSTOM || voiceId === VOICE_NONE ? null : voiceId,
-        customBrandVoice: voiceId === VOICE_CUSTOM ? customVoice.trim() || null : null,
-      });
-      if ("error" in result) setError(result.error);
-      else {
-        setOptions(result.options);
-        setRunId(result.runId);
+      try {
+        const response = await fetch("/api/ai/suggest", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          signal: controller.signal,
+          body: JSON.stringify({
+            versionId,
+            model,
+            mode,
+            shape,
+            instructions: instructions.trim() || null,
+            optionCount,
+            scopeBlockIds: scopeIds,
+            scopeKind: metaScope ? "meta" : scope,
+            sectionLabel: scope === "section" ? (section?.label ?? null) : null,
+            webSearch,
+            allModels,
+            brandVoiceId: voiceId === VOICE_CUSTOM || voiceId === VOICE_NONE ? null : voiceId,
+            customBrandVoice: voiceId === VOICE_CUSTOM ? customVoice.trim() || null : null,
+          }),
+        });
+        const result = await response.json();
+        if (result.error) setError(result.error);
+        else {
+          setOptions(result.options);
+          setRunId(result.runId);
+        }
+      } catch (error) {
+        // Aborting is a choice the reviewer just made, not news to report.
+        if ((error as Error)?.name !== "AbortError") {
+          setError(error instanceof Error ? error.message : String(error));
+        }
+      } finally {
+        inFlight.current = null;
       }
     });
   };
+
+  const stop = () => inFlight.current?.abort();
 
   return (
     <section className="border-t border-[var(--color-line)] pt-3">
@@ -133,8 +163,10 @@ export function AiPanel({
 
       <div className="space-y-2">
         <select
-          className="field py-1 text-xs"
+          className="field py-1 text-xs disabled:opacity-50"
           value={model}
+          disabled={allModels}
+          title={allModels ? "Every model is being asked, so this is not used" : undefined}
           onChange={(e) => setModel(e.target.value)}
         >
           {config.models.map((m) => (
@@ -255,10 +287,14 @@ export function AiPanel({
         />
 
         <Toggle
-          checked={distinctOptions}
-          onChange={setDistinctOptions}
-          label="Genuinely different options"
-          hint={`One call per option, each given a different angle. Costs ${optionCount}× but stops the options being rewordings of one idea.`}
+          checked={allModels}
+          onChange={setAllModels}
+          label="Ask all the AIs"
+          hint={
+            config.models.length > 1
+              ? `Puts the request to all ${config.models.length} models instead of one, ${optionCount} options each. Costs ${config.models.length}× and takes as long as the slowest, but different models do not anchor on the same idea the way one model asked for three options does.`
+              : "Only one model is configured, so this asks the same one. Add more in Settings."
+          }
         />
         <Toggle
           checked={webSearch}
@@ -282,14 +318,25 @@ export function AiPanel({
               ))}
             </select>
           </label>
-          <button
-            type="button"
-            className="btn btn-primary ml-auto"
-            disabled={pending || readOnly || (!metaScope && scopeIds.length === 0)}
-            onClick={run}
-          >
-            {pending ? "Thinking…" : "Suggest"}
-          </button>
+          {pending ? (
+            <button
+              type="button"
+              className="btn ml-auto border-[var(--color-removed)] text-[var(--color-removed)]"
+              onClick={stop}
+              title="Stop this request. It really stops — the models are told to abandon it."
+            >
+              Stop
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-primary ml-auto"
+              disabled={readOnly || (!metaScope && scopeIds.length === 0)}
+              onClick={run}
+            >
+              Suggest
+            </button>
+          )}
         </div>
 
         {metaScope ? (
@@ -318,7 +365,16 @@ export function AiPanel({
               className="rounded-md border border-[var(--color-line)] p-2"
             >
               <div className="flex items-start justify-between gap-2">
-                <p className="text-xs font-semibold">{option.label}</p>
+                <p className="min-w-0 text-xs font-semibold">
+                  {option.label}
+                  {/* Which model wrote it. Only set when several were asked, so
+                      it stays out of the way on an ordinary request. */}
+                  {option.model ? (
+                    <span className="ml-1.5 font-normal text-[10px] text-[var(--color-ink-faint)]">
+                      {option.model.split("/").pop()}
+                    </span>
+                  ) : null}
+                </p>
                 <button
                   type="button"
                   className="btn shrink-0 px-2 py-0.5 text-[11px]"
