@@ -45,7 +45,8 @@ export function AiPanel({
   section: SectionScope | null;
   /** Current text of a block, for showing before/after inside an option. */
   describeBlock: (id: string) => { text: string; role: string } | null;
-  onApply: (ops: Op[]) => void;
+  /** `replacing` is the option applied before it, which this one supersedes. */
+  onApply: (ops: Op[], replacing?: Op[]) => void;
   readOnly: boolean;
 }) {
   const [model, setModel] = useState(config.defaultModel ?? config.models[0] ?? "");
@@ -109,11 +110,20 @@ export function AiPanel({
    * work actually stops rather than finishing unwatched and being billed for.
    */
   const inFlight = useRef<AbortController | null>(null);
+  /**
+   * The option applied from this request, if any.
+   *
+   * Trying option two after option one should replace it, not add to it. Reset
+   * per request, so applying a suggestion for one section never undoes a
+   * suggestion already applied to a different one.
+   */
+  const applied = useRef<Op[]>([]);
 
   const run = () => {
     setError(null);
     setOptions(null);
     setModelErrors([]);
+    applied.current = [];
     const controller = new AbortController();
     inFlight.current = controller;
 
@@ -433,7 +443,8 @@ export function AiPanel({
                   className="btn shrink-0 px-2 py-0.5 text-[11px]"
                   disabled={readOnly || option.ops.length === 0}
                   onClick={() => {
-                    onApply(option.ops);
+                    onApply(option.ops, applied.current);
+                    applied.current = option.ops;
                     if (runId) void recordChosenOptionAction(runId, index);
                   }}
                 >

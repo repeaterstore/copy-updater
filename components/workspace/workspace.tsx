@@ -267,9 +267,16 @@ export function Workspace({
   }, [diffMode, derived, commentCounts, frame, companion, showCompanion]);
 
   useEffect(() => {
+    // Both frames follow the selection. Picking a section and then hunting for
+    // it in the other frame is the manual work this is here to remove — the
+    // point of showing two widths is seeing the same copy in both at once.
     frame.selectBlock(selectedId);
     if (selectedId) frame.scrollToBlock(selectedId);
-  }, [selectedId, frame]);
+    if (showCompanion) {
+      companion.selectBlock(selectedId);
+      if (selectedId) companion.scrollToBlock(selectedId);
+    }
+  }, [selectedId, frame, companion, showCompanion]);
 
   const upsertText = useCallback(
     (id: string, html: string) => {
@@ -317,9 +324,20 @@ export function Workspace({
    * — applyOps takes the last write, so leaving both would work but would make
    * the op list grow without bound and the history impossible to read.
    */
-  const mergeOps = useCallback((incoming: Op[]) => {
+  /**
+   * Fold a suggestion's ops into the list, replacing the one it supersedes.
+   *
+   * `replacing` is what the panel applied last from the same request. Without
+   * it, trying three options in turn stacked all three: setText is keyed by
+   * block so it overwrites, but an insert has nowhere to collide, so every
+   * apply added another copy — a section read back with the same line four
+   * times over. Compared by reference, which holds because these are the very
+   * objects the panel was handed.
+   */
+  const mergeOps = useCallback((incoming: Op[], replacing: Op[] = []) => {
     setOps((current) => {
-      let next = [...current];
+      const superseded = new Set<Op>(replacing);
+      let next = current.filter((op) => !superseded.has(op));
       for (const op of incoming) {
         if (op.t === "setText") {
           next = next.filter((existing) => !(existing.t === "setText" && existing.id === op.id));
