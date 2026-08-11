@@ -234,6 +234,23 @@ test("subheadings nest under their band instead of ending it", () => {
   const scope = sectionScopeFor(derived, small.block.id)!;
   assert.equal(scope.label, "Coverage › Small sites");
   assert.equal(scope.blockIds.length, 2);
+
+  // Selecting the band itself takes its subsections with it. Scoping to the
+  // parent's own two lines and dropping the subsections rewrote a fraction of
+  // what the outline says the section contains.
+  const parent = sectionScopeFor(derived, band.blocks[0].block.id)!;
+  assert.equal(parent.label, "Coverage");
+  const texts = derived
+    .filter((d) => parent.blockIds.includes(d.block.id))
+    .map((d) => d.text);
+  assert.deepEqual(texts, [
+    "Coverage",
+    "Intro line.",
+    "Small sites",
+    "Up to 5,000 sq ft.",
+    "Campuses",
+    "Multi-building.",
+  ]);
 });
 
 test("a long list is not carved into one group per row", () => {

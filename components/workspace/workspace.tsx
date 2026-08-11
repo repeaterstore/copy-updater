@@ -290,6 +290,27 @@ export function Workspace({
   }, []);
 
   /**
+   * Put a whole section back the way it was.
+   *
+   * Reverting a section one block at a time meant fifteen trips through the
+   * inspector to undo one suggestion, and no way at all to undo the structural
+   * part of it. This drops every op that touches the section — the rewrites and
+   * anything inserted, moved or removed against it.
+   */
+  const revertBlocks = useCallback((ids: string[]) => {
+    const inSection = new Set(ids);
+    setOps((current) =>
+      current.filter((op) => {
+        if ("id" in op && typeof op.id === "string" && inSection.has(op.id)) return false;
+        // An insert or move names its anchor rather than itself, so a bullet
+        // added to this section would otherwise survive the revert.
+        if ("refId" in op && typeof op.refId === "string" && inSection.has(op.refId)) return false;
+        return true;
+      }),
+    );
+  }, []);
+
+  /**
    * Fold a suggestion's ops into the current list.
    *
    * A setText for a block that already has one replaces it rather than stacking
@@ -516,6 +537,7 @@ export function Workspace({
               setPane("inspector");
             }}
             metaChanged={metaChanged}
+            onRevertSection={revertBlocks}
             onSelectSection={(firstBlockId) => {
               setSelectedId(firstBlockId);
               setPane("inspector");

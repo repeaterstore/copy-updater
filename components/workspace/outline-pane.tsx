@@ -27,6 +27,7 @@ export function OutlinePane({
   metaChanged,
   onSelectMeta,
   onSelectSection,
+  onRevertSection,
   structuralCount,
   commentCounts,
 }: {
@@ -37,6 +38,8 @@ export function OutlinePane({
   onSelectMeta: () => void;
   /** Selects the section's first block, which is what section scope keys off. */
   onSelectSection: (firstBlockId: string) => void;
+  /** Drop every op touching these blocks, putting the section back as captured. */
+  onRevertSection: (blockIds: string[]) => void;
   structuralCount: number;
   /** Unresolved comments per block id. */
   commentCounts: Record<string, number>;
@@ -243,6 +246,19 @@ export function OutlinePane({
                   <span className="shrink-0 text-[10px] text-[var(--color-comment)]">💬</span>
                 ) : null}
               </button>
+              {/* Only where there is something to undo. Reverting a section a
+                  block at a time meant a trip through the inspector for each
+                  one, with no way at all to undo an inserted element. */}
+              {changedHere > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => onRevertSection(all.map((d) => d.block.id))}
+                  title={`Discard all ${changedHere} change${changedHere === 1 ? "" : "s"} in this section`}
+                  className="shrink-0 rounded px-1 py-1 text-[10px] text-[var(--color-ink-faint)] transition-colors hover:text-[var(--color-removed)]"
+                >
+                  ↺
+                </button>
+              ) : null}
             </div>
             {open ? section.blocks.map((derived) => (
               <button

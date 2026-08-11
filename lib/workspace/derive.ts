@@ -466,8 +466,12 @@ export function sectionScopeFor(
   if (!section) return null;
   const found: Section = section;
 
-  const visible = found.blocks.filter((d) => isVisible(d.block));
-  const usable = visible.length > 0 ? visible : found.blocks;
+  // Subsections included. The outline counts a section's whole subtree and the
+  // heading names all of it, so scoping to the parent's own paragraphs and
+  // silently dropping its children rewrote a fraction of what was asked for.
+  const all = sectionBlocks(found);
+  const visible = all.filter((d) => isVisible(d.block));
+  const usable = visible.length > 0 ? visible : all;
 
   return {
     label: found.path.join(" › "),

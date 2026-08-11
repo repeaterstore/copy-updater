@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { JSDOM } from "jsdom";
 import { extractBlocks, stampIds } from "@/lib/ops/extract";
-import { buildUserPrompt, neighboursFor, pageSummaryFor } from "./prompt";
+import { buildSystemPrompt, buildUserPrompt, neighboursFor, pageSummaryFor } from "./prompt";
 import type { Block } from "@/lib/ops/types";
 
 const PAGE = `<!doctype html><html><body>
@@ -199,4 +199,18 @@ test("asking for several options says how to make them differ", () => {
   const one = buildUserPrompt({ ...base, optionCount: 1 });
   assert.match(one, /Return exactly one option\./);
   assert.doesNotMatch(one, /genuinely different attempts/);
+});
+
+test("layout mode asks for structure, copy mode forbids it", () => {
+  const layout = buildSystemPrompt("layout");
+  // Listing the ops is not asking for them: across three real layout-mode runs,
+  // eight of nine options came back as pure setText.
+  assert.match(layout, /Structure is part of the answer here/);
+  assert.match(layout, /would work better with the order changed/);
+  // ...without demanding change for its own sake.
+  assert.match(layout, /Do not invent structural churn/);
+
+  const copy = buildSystemPrompt("copy");
+  assert.match(copy, /Do not add, remove, move or restyle anything/);
+  assert.doesNotMatch(copy, /Structure is part of the answer here/);
 });
