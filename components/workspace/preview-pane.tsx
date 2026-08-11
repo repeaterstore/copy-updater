@@ -3,9 +3,19 @@
 import { useEffect, useRef, useState } from "react";
 import type { PreviewFrameApi } from "@/lib/preview/use-preview-frame";
 
-export type Device = "desktop" | "mobile";
+export type Device = "desktop" | "mobile" | "both";
 
-const WIDTHS: Record<Device, number> = { desktop: 1440, mobile: 390 };
+/** The width the frame is really rendered at, so the page's own media queries fire. */
+const WIDTHS: Record<Exclude<Device, "both">, number> = { desktop: 1440, mobile: 390 };
+
+/**
+ * Room for the phone alongside the desktop frame.
+ *
+ * Fixed rather than a fraction: at 390px plus its bezel the phone renders
+ * near 1:1, which is the whole point of looking at it, and the desktop frame
+ * takes whatever is left and scales into it.
+ */
+export const COMPANION_WIDTH = 430;
 
 /**
  * The snapshot iframe, rendered at a real device width and scaled to fit.
@@ -26,7 +36,8 @@ export function PreviewPane({
   snapshotId: string;
   /** Content hash of the injected preview runtime; see the src below. */
   runtimeVersion: string;
-  device: Device;
+  /** A single frame is always one real device; "both" is two of these. */
+  device: Exclude<Device, "both">;
   loading?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -107,6 +118,12 @@ export function PreviewPane({
   );
 }
 
+const DEVICE_HINT: Record<Device, string> = {
+  desktop: "Desktop only, 1440px",
+  mobile: "Mobile only, 390px",
+  both: "Desktop and mobile side by side — the phone stays near full size",
+};
+
 export function DeviceToggle({
   device,
   onChange,
@@ -116,11 +133,12 @@ export function DeviceToggle({
 }) {
   return (
     <div className="inline-flex rounded-lg border border-[var(--color-line-strong)] p-0.5">
-      {(["desktop", "mobile"] as Device[]).map((option) => (
+      {(["desktop", "mobile", "both"] as Device[]).map((option) => (
         <button
           key={option}
           type="button"
           onClick={() => onChange(option)}
+          title={DEVICE_HINT[option]}
           className={`rounded-md px-2.5 py-1 text-xs font-medium capitalize transition-colors ${
             device === option
               ? "bg-[var(--color-accent)] text-white"

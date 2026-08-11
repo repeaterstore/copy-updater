@@ -21,7 +21,7 @@ import type { VersionStatus } from "@/db/schema";
 import { orderByLineage, SNAPSHOT_BASELINE, type LineageRow } from "@/lib/version-tree";
 import { AiPanel, type AiConfig } from "./ai-panel";
 import { CommentPanel, type CommentItem } from "./comment-panel";
-import { DeviceToggle, PreviewPane, type Device } from "./preview-pane";
+import { COMPANION_WIDTH, DeviceToggle, PreviewPane, type Device } from "./preview-pane";
 import { InspectorPane } from "./inspector-pane";
 import { OutlinePane } from "./outline-pane";
 
@@ -140,23 +140,83 @@ export function Workspace({
       setProblems(failures.map((f) => `${f.id || "(unknown)"}: ${f.reason}`)),
   });
 
+  /**
+   * The phone shown beside the desktop frame.
+   *
+   * Deliberately handler-free and never editable: two editable frames would
+   * both post edits for the same block, and a click in one would fight the
+   * selection in the other. It mirrors what the primary frame shows.
+   */
+  const companion = usePreviewFrame({});
+  const showCompanion = device === "both";
+
+  /**
+   * The wording this version is being compared against, as ops.
+   *
+   * Held down, "Before" swaps these in so the reviewer can flick between the
+   * proposal and what it replaced in place, on the page, rather than reading
+   * two columns of text in the inspector. Built from the changed blocks only,
+   * since applying an op for every block on the page would replay a thousand
+   * of them to change nothing.
+   */
+  const baselineOps = useMemo<Op[]>(
+    () =>
+      derived
+        .filter((d) => d.changed)
+        .map((d) => ({ t: "setText", id: d.block.id, html: d.block.html })),
+    [derived],
+  );
+  const [showingBefore, setShowingBefore] = useState(false);
+
+  // Releasing outside the button, or losing the window mid-hold, must not leave
+  // the preview stuck showing the old copy.
+  useEffect(() => {
+    if (!showingBefore) return;
+    const release = () => setShowingBefore(false);
+    window.addEventListener("pointerup", release);
+    window.addEventListener("blur", release);
+    return () => {
+      window.removeEventListener("pointerup", release);
+      window.removeEventListener("blur", release);
+    };
+  }, [showingBefore]);
+
   // Push the current op list into the preview. Debounced: typing produces an op
   // per keystroke and each apply replays the whole list against the snapshot.
   // Keyed on frame.ready as well as ops, so the list is (re)sent once the
   // snapshot finishes loading — a 20 MB page can take tens of seconds, by which
   // time the initial send has long since happened.
+  //
+  // Applying rewrites the edited element, so the runtime saves and restores the
+  // caret around it; see preserveCaret in lib/browser/preview-entry.ts. Holding
+  // the echo back here instead looks tempting and is wrong: the typed text
+  // would then exist only in the frame's DOM, with no undo entry, and "Revert
+  // to original" would clear the op while leaving the text on screen.
   const applyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
+    // Holding "Before" should feel like a light switch, so it skips the debounce
+    // that exists to stop every keystroke replaying the list.
+    const list = showingBefore ? baselineOps : ops;
+    const delay = showingBefore ? 0 : 180;
     if (applyTimer.current) clearTimeout(applyTimer.current);
-    applyTimer.current = setTimeout(() => frame.applyOps(ops), 180);
+    applyTimer.current = setTimeout(() => {
+      frame.applyOps(list);
+      if (showCompanion) companion.applyOps(list);
+    }, delay);
     return () => {
       if (applyTimer.current) clearTimeout(applyTimer.current);
     };
-  }, [ops, frame, frame.ready]);
+  }, [
+    ops, baselineOps, showingBefore, frame, frame.ready,
+    companion, companion.ready, showCompanion,
+  ]);
 
   useEffect(() => {
-    frame.setEditable(editMode && !readOnly);
-  }, [editMode, readOnly, frame]);
+    // Never editable while the previous wording is on screen: a keystroke there
+    // would be recorded as an edit to text this version had already replaced.
+    frame.setEditable(editMode && !readOnly && !showingBefore);
+    if (showCompanion) companion.setEditable(false);
+  }, [editMode, readOnly, showingBefore, frame, companion, showCompanion]);
 
   /** Unresolved comments per block. Resolved ones are deliberately excluded. */
   const commentCounts = useMemo(() => {
@@ -171,19 +231,22 @@ export function Workspace({
   useEffect(() => {
     if (!diffMode) {
       frame.setDiffMode(false, null);
+      if (showCompanion) companion.setDiffMode(false, null);
       return;
     }
     const changed = derived.filter((d) => d.changed).map((d) => d.block.id);
     const risk = derived.filter((d) => d.layoutRisk).map((d) => d.block.id);
-    frame.setDiffMode(true, {
+    const highlights = {
       changed,
       added: [],
       removed: [],
       moved: [],
       layoutRisk: risk,
       comments: commentCounts,
-    });
-  }, [diffMode, derived, commentCounts, frame]);
+    };
+    frame.setDiffMode(true, highlights);
+    if (showCompanion) companion.setDiffMode(true, highlights);
+  }, [diffMode, derived, commentCounts, frame, companion, showCompanion]);
 
   useEffect(() => {
     frame.selectBlock(selectedId);
@@ -347,6 +410,9 @@ export function Workspace({
         editMode={editMode}
         device={device}
         onDevice={setDevice}
+        showingBefore={showingBefore}
+        onShowBefore={setShowingBefore}
+        baselineName={parentLabel ?? "the live page"}
         onDiffMode={setDiffMode}
         onEditMode={setEditMode}
         onSave={save}
@@ -432,13 +498,34 @@ export function Workspace({
         </aside>
 
         <main className={`min-h-0 min-w-0 ${pane === "preview" ? "" : "hidden xl:block"}`}>
-          <PreviewPane
-            frame={frame}
-            snapshotId={snapshotId}
-            runtimeVersion={runtimeVersion}
-            device={device}
-            loading={!frame.ready}
-          />
+          {/* The primary frame keeps its place in the tree whatever the device
+              is, so switching modes never remounts it — a remount means
+              re-downloading a snapshot that can run to tens of megabytes. */}
+          <div className="flex h-full min-w-0">
+            <div className="min-h-0 min-w-0 flex-1">
+              <PreviewPane
+                frame={frame}
+                snapshotId={snapshotId}
+                runtimeVersion={runtimeVersion}
+                device={device === "both" ? "desktop" : device}
+                loading={!frame.ready}
+              />
+            </div>
+            {device === "both" ? (
+              <div
+                className="min-h-0 shrink-0 border-l border-[var(--color-line)]"
+                style={{ width: COMPANION_WIDTH }}
+              >
+                <PreviewPane
+                  frame={companion}
+                  snapshotId={snapshotId}
+                  runtimeVersion={runtimeVersion}
+                  device="mobile"
+                  loading={!companion.ready}
+                />
+              </div>
+            ) : null}
+          </div>
         </main>
 
         <aside
@@ -611,6 +698,57 @@ function EditableLabel({ versionId, label }: { versionId: string; label: string 
   );
 }
 
+/**
+ * Hold to see the copy this version replaced.
+ *
+ * A press-and-hold rather than a toggle on purpose: the comparison people
+ * actually make is a flick back and forth, and a toggle turns that into two
+ * clicks and a question about which state you are currently looking at. While
+ * it is down the preview shows the baseline, and it always comes back up —
+ * releasing anywhere on the page, or leaving the window, ends the hold.
+ */
+function BeforeButton({
+  active,
+  onChange,
+  baselineName,
+}: {
+  active: boolean;
+  onChange: (on: boolean) => void;
+  baselineName: string;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      title={`Hold to see this copy as it reads in ${baselineName}`}
+      onPointerDown={(e) => {
+        e.preventDefault();
+        onChange(true);
+      }}
+      onPointerUp={() => onChange(false)}
+      onPointerLeave={() => onChange(false)}
+      onPointerCancel={() => onChange(false)}
+      // Keyboard equivalent: hold space or enter. Repeat events fire while a key
+      // is held, so the guard keeps this to one state change per press.
+      onKeyDown={(e) => {
+        if ((e.key === " " || e.key === "Enter") && !e.repeat) {
+          e.preventDefault();
+          onChange(true);
+        }
+      }}
+      onKeyUp={(e) => {
+        if (e.key === " " || e.key === "Enter") onChange(false);
+      }}
+      onBlur={() => onChange(false)}
+      className={`btn select-none ${
+        active ? "border-[var(--color-removed)] text-[var(--color-removed)]" : ""
+      }`}
+    >
+      {active ? "Before ↩" : "Before"}
+    </button>
+  );
+}
+
 function Toolbar({
   version,
   versions,
@@ -624,6 +762,9 @@ function Toolbar({
   readOnly,
   diffMode,
   editMode,
+  showingBefore,
+  onShowBefore,
+  baselineName,
   device,
   onDevice,
   onDiffMode,
@@ -643,6 +784,10 @@ function Toolbar({
   readOnly: boolean;
   diffMode: boolean;
   editMode: boolean;
+  showingBefore: boolean;
+  onShowBefore: (on: boolean) => void;
+  /** What the diff is against, named, for the Before button's tooltip. */
+  baselineName: string;
   device: Device;
   onDevice: (d: Device) => void;
   onDiffMode: (on: boolean) => void;
@@ -739,6 +884,13 @@ function Toolbar({
           >
             Edit on page
           </button>
+        ) : null}
+        {changedCount > 0 ? (
+          <BeforeButton
+            active={showingBefore}
+            onChange={onShowBefore}
+            baselineName={baselineName}
+          />
         ) : null}
         <DeviceToggle device={device} onChange={onDevice} />
 

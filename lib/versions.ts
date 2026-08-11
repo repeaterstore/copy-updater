@@ -113,14 +113,44 @@ export async function baselineFor(version: VersionRow): Promise<Resolved> {
   return snapshotBaseline(version.snapshotId);
 }
 
+/**
+ * Resolved snapshots, cached like skeletons and for the same reason.
+ *
+ * Resolving is a jsdom parse of the whole page: 0.4s for a 400-block page and
+ * 3.7s for a 1,000-block one. Every root version's workspace needs it, so
+ * without this every open of every root version paid that again for a result
+ * that cannot have changed — a snapshot is immutable and the op list is empty.
+ *
+ * Bounded because the container also runs Chromium during capture, and a
+ * resolved 1,000-block page is a few megabytes.
+ */
+const baselineCache = new Map<string, Resolved>();
+const BASELINE_CACHE_LIMIT = 8;
+
 /** The snapshot with no ops applied — what the page says today. */
 export async function snapshotBaseline(snapshotId: string): Promise<Resolved> {
+  const cached = baselineCache.get(snapshotId);
+  if (cached) return cached;
+
   const snapshot = await db.query.snapshots.findFirst({
     where: eq(schema.snapshots.id, snapshotId),
   });
   if (!snapshot) return EMPTY_RESOLVED;
   const skeleton = await loadSkeleton(snapshot);
-  return resolveVersion(skeleton, []).resolved;
+  const resolved = resolveVersion(skeleton, []).resolved;
+
+  // Boxes matter here as much as they do for an edited version: they are what
+  // tells the outline a mega-menu is collapsed and what lets a screenshot be
+  // cropped. Resolving under jsdom returns none, so a root version's workspace
+  // used to see every block as visible.
+  const withBoxes: Resolved = { ...resolved, blocks: carryBoxes(resolved.blocks, snapshot) };
+
+  if (baselineCache.size >= BASELINE_CACHE_LIMIT) {
+    const oldest = baselineCache.keys().next().value;
+    if (oldest) baselineCache.delete(oldest);
+  }
+  baselineCache.set(snapshotId, withBoxes);
+  return withBoxes;
 }
 
 export async function diffVersions(
