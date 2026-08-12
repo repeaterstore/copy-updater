@@ -56,23 +56,36 @@ export async function createVersionAction(input: {
   return { id: version.id };
 }
 
+/**
+ * Expected failures are *returned*, never thrown.
+ *
+ * A server action's thrown error does not survive the boundary in production:
+ * Next.js replaces the message with a generic digest ("Minified React error
+ * #441") so nothing sensitive leaks. The workspace then displayed that boiler-
+ * plate in its "Some changes could not be applied" banner, which told a
+ * copywriter nothing and sent the real reason to the server log only.
+ * A returned value crosses intact. Genuinely unexpected throws still bubble.
+ */
 export async function saveOpsAction(
   versionId: string,
   ops: unknown,
-): Promise<{ failures: { reason: string }[] }> {
+): Promise<{ failures: { reason: string }[]; error?: string }> {
   await requireUser();
 
   const parsed = OpListSchema.safeParse(ops);
   if (!parsed.success) {
-    throw new Error(`Invalid operations: ${parsed.error.issues[0]?.message}`);
+    return { failures: [], error: `Invalid operations: ${parsed.error.issues[0]?.message}` };
   }
 
   const version = await db.query.versions.findFirst({
     where: eq(schema.versions.id, versionId),
   });
-  if (!version) throw new Error("Version not found.");
+  if (!version) return { failures: [], error: "Version not found." };
   if (version.status === "approved") {
-    throw new Error("This version is approved and can no longer be edited. Fork it instead.");
+    return {
+      failures: [],
+      error: "This version is approved and can no longer be edited. Fork it instead.",
+    };
   }
 
   const { failures } = await setVersionOps(versionId, parsed.data);
