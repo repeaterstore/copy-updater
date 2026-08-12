@@ -70,6 +70,26 @@ export function InspectorPane({
   );
 }
 
+/**
+ * The block's markup with the source page's own line breaks and indentation
+ * taken out.
+ *
+ * A captured block keeps the whitespace it was written with — a heading is
+ * routinely `"\n              Turn-Key DAS Solutions v3\n            "` — and
+ * a browser collapses all of that when it renders, which is why the block
+ * reads tight on the page and in "Currently on the page". A textarea does not:
+ * it shows every character, so the copy appeared two blank lines down and
+ * fourteen spaces in, with the box mostly empty around it.
+ *
+ * Collapsing runs of whitespace is what the renderer does anyway, so nothing
+ * about the block changes — except inside `<pre>`, where the whitespace is the
+ * content, so that is left exactly as captured.
+ */
+function tidy(html: string): string {
+  if (/<pre[\s>]/i.test(html)) return html;
+  return html.replace(/\s+/g, " ").trim();
+}
+
 function BlockEditor({
   derived,
   onChange,
@@ -85,14 +105,14 @@ function BlockEditor({
   aiSlot?: React.ReactNode;
   commentSlot?: React.ReactNode;
 }) {
-  const [draft, setDraft] = useState(derived.html);
   const [showHtml, setShowHtml] = useState(false);
+  const [draft, setDraft] = useState(() => tidy(derived.html));
 
   // Adopt external changes (an applied AI option, an inline edit in the
   // preview) without clobbering what is being typed here.
   useEffect(() => {
-    setDraft(derived.html);
-  }, [derived.html]);
+    setDraft(showHtml ? derived.html : tidy(derived.html));
+  }, [derived.html, showHtml]);
 
   const hasMarkup = /<[a-z][^>]*>/i.test(derived.block.html);
 
