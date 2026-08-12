@@ -624,7 +624,11 @@ export function Workspace({
             }`}
           >
             <div
-              className="min-h-0 min-w-0"
+              // shrink-0 stacked: the panes are sized to their content there,
+              // and a flex column would otherwise squeeze both to fit the
+              // height it has, giving each its own scrollbar inside the
+              // column's — which is the arrangement `fit` exists to avoid.
+              className={stacked && showCompanion ? "min-w-0 shrink-0" : "min-h-0 min-w-0"}
               // Grows into whatever the phone leaves, and shrinks in proportion
               // to its own width rather than absorbing the whole squeeze: with
               // the phone pinned to a fixed pixel width, narrowing the window
@@ -649,12 +653,10 @@ export function Workspace({
             </div>
             {companionMounted ? (
               <div
-                className={`min-h-0 min-w-0 ${
-                  showCompanion ? "" : "hidden"
-                } ${
+                className={`min-w-0 ${showCompanion ? "" : "hidden"} ${
                   stacked && showCompanion
-                    ? "border-t border-[var(--color-line)]"
-                    : "h-full border-l border-[var(--color-line)]"
+                    ? "shrink-0 border-t border-[var(--color-line)]"
+                    : "h-full min-h-0 border-l border-[var(--color-line)]"
                 }`}
                 // Its natural width when there is room — the zoom control is
                 // what trades width between the two frames — and no smaller

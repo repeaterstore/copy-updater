@@ -368,3 +368,35 @@ test("structural highlights come from the ops, without resolving anything", () =
   // Removals are not in there on purpose: the element is gone from the page,
   // so the preview has nothing left to paint.
 });
+
+test("a block inserted before a section's first block joins that section", () => {
+  const page = `<!doctype html><html><body>
+    <section><h2>Warranty</h2><p>Two years, parts and labour.</p></section>
+    <section><h2>Shipping</h2><p>Free over fifty pounds.</p></section>
+  </body></html>`;
+  const blocks = withBoxes(blocksOf(page), () => true);
+  // The heading that opens the second section — the anchor a "before" insert
+  // would name to put a kicker above it.
+  const secondHeading = blocks.find((b) => b.text === "Shipping");
+  assert.ok(secondHeading, "the fixture has a second section");
+
+  const ops: Op[] = [
+    {
+      t: "insert",
+      refId: secondHeading.id,
+      pos: "before",
+      html: '<p data-cu-id="new:kicker">Delivery, in short</p>',
+    },
+  ];
+  const sections = groupIntoSections(deriveBlocks(blocks, ops));
+
+  const owner = sections.find((s) =>
+    sectionBlocks(s).some((d) => d.text === "Delivery, in short"),
+  );
+  assert.ok(owner, "the inserted block is in some section");
+  // It reads above "Shipping", so that is where a reviewer will look for it —
+  // not filed under the warranty section that happens to precede it.
+  const texts = sectionBlocks(owner).map((d) => d.text);
+  assert.ok(texts.includes("Shipping"), `grouped with its anchor, got ${texts.join(" | ")}`);
+  assert.ok(!texts.includes("Two years, parts and labour."), "not the previous section");
+});

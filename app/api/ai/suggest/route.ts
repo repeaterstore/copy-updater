@@ -54,8 +54,20 @@ function reasoningFor(
   return "high";
 }
 
-function fail(error: string, status = 200) {
-  return Response.json({ error }, { status });
+/**
+ * An early failure, in the same shape as everything else the client reads.
+ *
+ * Plain JSON was silently discarded: the reader parses completed lines and
+ * throws away the remainder, so a single unterminated object — which is what
+ * `Response.json` writes — was never parsed at all. "No OpenRouter API key
+ * configured" reached the browser and vanished, leaving Suggest to click and
+ * do nothing.
+ */
+function fail(message: string) {
+  const frame: Frame = { type: "error", message };
+  return new Response(JSON.stringify(frame) + "\n", {
+    headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" },
+  });
 }
 
 /**
@@ -142,8 +154,19 @@ export async function POST(request: Request) {
         }
       };
 
+      /*
+       * The options in the order the reviewer sees them.
+       *
+       * With several models asked, they finish out of order, and the generator
+       * returns them grouped by model. The panel lists them as they arrive and
+       * records which one was applied by its position in that list — so the
+       * stored array has to be the streamed order, or "chosen option 1" names
+       * a suggestion nobody picked.
+       */
+      const streamed: SuggestOption[] = [];
+
       try {
-        const { options, modelId } = await generateSuggestions({
+        const { modelId } = await generateSuggestions({
           modelId: input.model,
           models: settings.models,
           allModels: input.allModels,
@@ -168,9 +191,17 @@ export async function POST(request: Request) {
           abortSignal: request.signal,
           // The point of the stream: an option goes out the moment it is
           // complete, rather than when its siblings and the other models are.
-          onOption: (model, option) => send({ type: "option", model, option }),
+          onOption: (model, option) => {
+            streamed.push(option);
+            send({ type: "option", model, option });
+          },
           onModelFailed: (model, message) => send({ type: "modelFailed", model, message }),
         });
+
+        // Stopped between the last model answering and the row being written:
+        // there is nobody to hand a run id to, and a run the reviewer withdrew
+        // should not turn up in the history as though it completed.
+        if (request.signal.aborted) return;
 
         const [run] = await db
           .insert(schema.aiRuns)
@@ -185,7 +216,7 @@ export async function POST(request: Request) {
             scope: { kind: input.scopeKind, blockIds: input.scopeBlockIds },
             instructions: input.instructions,
             brandVoice,
-            options: options.map((o) => ({
+            options: streamed.map((o) => ({
               label: o.label,
               rationale: o.rationale,
               ops: o.ops,

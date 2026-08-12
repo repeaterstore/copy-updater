@@ -123,6 +123,10 @@ export function AiPanel({
     setError(null);
     setOptions(null);
     setModelErrors([]);
+    // Not the previous request's run. Applying the first option of a new one
+    // before it finishes would otherwise be recorded against the old run,
+    // naming a suggestion from a request nobody is looking at any more.
+    setRunId(null);
     applied.current = [];
     const controller = new AbortController();
     inFlight.current = controller;
@@ -161,6 +165,20 @@ export function AiPanel({
         const decoder = new TextDecoder();
         let buffer = "";
 
+        const handle = (line: string) => {
+          if (!line.trim()) return;
+          const frame = JSON.parse(line);
+          if (frame.type === "option") {
+            setOptions((current) => [...(current ?? []), frame.option]);
+          } else if (frame.type === "modelFailed") {
+            setModelErrors((current) => [...current, `${frame.model}: ${frame.message}`]);
+          } else if (frame.type === "done") {
+            setRunId(frame.runId);
+          } else if (frame.type === "error") {
+            setError(frame.message);
+          }
+        };
+
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -169,21 +187,13 @@ export function AiPanel({
           // The last piece may be a partial line; leave it for the next chunk.
           const lines = buffer.split("\n");
           buffer = lines.pop() ?? "";
-
-          for (const line of lines) {
-            if (!line.trim()) continue;
-            const frame = JSON.parse(line);
-            if (frame.type === "option") {
-              setOptions((current) => [...(current ?? []), frame.option]);
-            } else if (frame.type === "modelFailed") {
-              setModelErrors((current) => [...current, `${frame.model}: ${frame.message}`]);
-            } else if (frame.type === "done") {
-              setRunId(frame.runId);
-            } else if (frame.type === "error") {
-              setError(frame.message);
-            }
-          }
+          for (const line of lines) handle(line);
         }
+
+        // Whatever arrived without a closing newline. A request that fails
+        // before the stream starts is one short object and nothing else, so
+        // dropping the remainder here is dropping the entire explanation.
+        handle(buffer);
       } catch (error) {
         // Aborting is a choice the reviewer just made, not news to report.
         if ((error as Error)?.name !== "AbortError") {

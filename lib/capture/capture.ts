@@ -236,14 +236,29 @@ async function expandDisclosures(page: Page): Promise<{ clicked: number; reveale
     /** A pathological page should not turn into thousands of clicks. */
     const LIMIT = 200;
 
-    for (const el of Array.from(document.querySelectorAll("details:not([open])")).slice(0, LIMIT)) {
+    /** Site furniture, by tag or by sitting at the very top of the page. */
+    const isChrome = (el: Element) => {
+      if (el.closest(CHROME)) return true;
+      const box = el.getBoundingClientRect();
+      return box.top + window.scrollY < CHROME_BAND_PX;
+    };
+
+    // The same two exclusions as everything below. A mega-menu built out of
+    // `<details>` is still a mega-menu, and left open it both dominates the
+    // screenshot and uses up the budget that the content further down needs.
+    let opened = 0;
+    for (const el of Array.from(document.querySelectorAll("details:not([open])"))) {
+      if (opened >= LIMIT) break;
+      if (isChrome(el)) continue;
       (el as HTMLDetailsElement).open = true;
+      opened += 1;
     }
 
     const triggers = Array.from(
       document.querySelectorAll<HTMLElement>('[aria-expanded="false"]'),
     ).slice(0, LIMIT);
 
+    let clicked = 0;
     for (const trigger of triggers) {
       if (trigger.closest(CHROME)) continue;
 
@@ -251,6 +266,17 @@ async function expandDisclosures(page: Page): Promise<{ clicked: number; reveale
       // href is not worth the risk of navigating away mid-capture.
       const href = trigger.getAttribute("href");
       if (href && href !== "#" && !href.startsWith("#")) continue;
+
+      /*
+       * Neither is a submit control, which is the other way a click leaves the
+       * page. A `<button>` inside a form submits by default — type is only
+       * "button" when it says so — and a capture that navigates mid-run either
+       * fails or freezes the wrong page.
+       */
+      const tag = trigger.tagName.toLowerCase();
+      const type = (trigger.getAttribute("type") ?? "").toLowerCase();
+      if (tag === "input" && type !== "button") continue;
+      if (tag === "button" && type !== "button" && trigger.closest("form")) continue;
 
       const box = trigger.getBoundingClientRect();
       if (box.top + window.scrollY < CHROME_BAND_PX) continue;
@@ -266,6 +292,7 @@ async function expandDisclosures(page: Page): Promise<{ clicked: number; reveale
 
       try {
         trigger.click();
+        clicked += 1;
       } catch {
         // A widget that throws on click is one to leave closed.
       }
@@ -292,19 +319,49 @@ async function expandDisclosures(page: Page): Promise<{ clicked: number; reveale
      * one to edit. A panel whose words are already on screen is a variant; a
      * panel whose words appear nowhere is hidden content.
      */
+    /*
+     * One pass, one normalisation each.
+     *
+     * `textContent` on an element returns every descendant's text, so reading
+     * and normalising it for every element on the page is already superlinear
+     * in the depth of the tree; doing it twice, once to build this set and
+     * again to test against it, doubled that. The text is kept alongside the
+     * element instead, and the same cap applies to both halves.
+     */
+    const SCAN_LIMIT = 4000;
+    const scanned: Array<{ el: HTMLElement; text: string }> = [];
     const onScreen = new Set<string>();
-    for (const el of Array.from(document.querySelectorAll<HTMLElement>("*"))) {
-      const text = normalise(el.textContent ?? "");
-      if (text.length >= 20 && el.getClientRects().length > 0) onScreen.add(text);
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>("*")).slice(0, SCAN_LIMIT)) {
+      const raw = el.textContent ?? "";
+      if (raw.trim().length < 20) continue;
+      const text = normalise(raw);
+      if (el.getClientRects().length > 0) onScreen.add(text);
+      else scanned.push({ el, text });
     }
 
+    /*
+     * Things that are hidden because they are meant to be, not because they
+     * are collapsed.
+     *
+     * A modal, a drawer, a cookie banner: each is a hidden run of text with a
+     * visible sibling — the page itself — so the accordion signature matches
+     * them exactly. Forcing one open lays it over the page in the screenshot
+     * and files its copy in the outline as if it were part of the page.
+     */
+    const OVERLAY = '[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog';
+
     const revealed: HTMLElement[] = [];
-    for (const el of Array.from(document.querySelectorAll<HTMLElement>("*")).slice(0, 4000)) {
+    for (const { el, text: normalised } of scanned) {
       if (el.closest(CHROME)) continue;
-      if ((el.textContent ?? "").trim().length < 20) continue;
-      if (onScreen.has(normalise(el.textContent ?? ""))) continue;
+      if (el.closest(OVERLAY)) continue;
+      // A direct child of body is a page region or an overlay, never a panel
+      // belonging to the disclosure next to it.
+      if (el.parentElement === document.body) continue;
+      if (onScreen.has(normalised)) continue;
 
       const style = getComputedStyle(el);
+      // Positioned out of flow: it is placed over the page rather than in it.
+      if (style.position === "fixed") continue;
       const hidden =
         style.display === "none" ||
         style.maxHeight === "0px" ||
@@ -332,7 +389,7 @@ async function expandDisclosures(page: Page): Promise<{ clicked: number; reveale
 
     // Let the site's own animations finish before anything is measured.
     await new Promise((resolve) => setTimeout(resolve, 400));
-    return { clicked: triggers.length, revealed: revealed.length };
+    return { clicked, revealed: revealed.length };
   });
 }
 

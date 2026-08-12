@@ -304,3 +304,18 @@ test("css index surfaces existing class names per block", () => {
   assert.ok(index[h1.id].includes("hero__title"));
   assert.ok(index[h1.id].includes("hero"), "ancestor classes included");
 });
+
+test("markup copied with an existing id is re-stamped, not left to collide", () => {
+  const { doc } = stamped();
+  const existing = extractBlocks(doc)[0];
+
+  // What a model does when it writes new markup after being shown the page's
+  // own stamped html: it copies an id along with the tag.
+  const html = assignNewIds(doc, `<p data-cu-id="${existing.id}">A new promise</p>`);
+  assert.ok(!html.includes(existing.id), `the copied id was kept: ${html}`);
+  assert.match(html, /data-cu-id="new:/);
+
+  // A replacement may keep the id of the thing it replaces — that one is its own.
+  const kept = assignNewIds(doc, `<p data-cu-id="${existing.id}">Reworded</p>`, existing.id);
+  assert.ok(kept.includes(existing.id), "the replaced element keeps its identity");
+});

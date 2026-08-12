@@ -21,6 +21,13 @@ export interface DerivedBlock {
   words: WordPart[] | null;
   growth: number | null;
   layoutRisk: boolean;
+  /**
+   * For an inserted block, the block it was inserted next to.
+   *
+   * An inserted id is `new:<nanoid>` with no structural path, so nothing about
+   * it says where on the page it belongs. Its anchor does.
+   */
+  anchorId?: string;
 }
 
 export const LAYOUT_RISK_RATIO = 1.3;
@@ -157,6 +164,7 @@ function withInserts(blocks: DerivedBlock[], ops: Op[]): DerivedBlock[] {
       words: null,
       growth: null,
       layoutRisk: false,
+      anchorId: op.refId,
     };
 
     const anchor = next.findIndex((d) => d.block.id === op.refId);
@@ -322,16 +330,48 @@ interface Group {
 }
 
 function splitInto(blocks: DerivedBlock[], depth: number): Group[] {
+  /*
+   * Where each block belongs, keyed by id, so an inserted block can be given
+   * the band of the block it was inserted against.
+   *
+   * Built first, in full, because an insert positioned "before" something sits
+   * ahead of its anchor in this list — and the anchor is precisely the block
+   * that opens the band it should join. Taking the running group instead put
+   * a heading inserted at the top of a section under the *previous* section,
+   * which is where a copywriter would then go looking for it in vain.
+   */
+  const keyOf = new Map<string, string>();
+  for (const derived of blocks) {
+    if (derived.block.id.includes("/")) {
+      keyOf.set(derived.block.id, containerAt(derived.block, depth));
+    }
+  }
+
+  const byId = new Map(blocks.map((d) => [d.block.id, d]));
+
+  /** An insert may be anchored to another insert; follow the chain. */
+  const anchorKey = (derived: DerivedBlock): string | undefined => {
+    let current: DerivedBlock | undefined = derived;
+    for (let hop = 0; current && hop < 10; hop += 1) {
+      const key = keyOf.get(current.block.id);
+      if (key) return key;
+      current = current.anchorId ? byId.get(current.anchorId) : undefined;
+    }
+    return undefined;
+  };
+
   const groups: Group[] = [];
   for (const derived of blocks) {
     const last = groups[groups.length - 1];
     // A block inserted by an op is identified as `new:<id>` and has no
     // structural path, so there is no container to group it by. It belongs
-    // where it sits — with the band it was inserted into, not as a band of its
-    // own, which is what one group per inserted bullet would look like.
-    const key = derived.block.id.includes("/")
-      ? containerAt(derived.block, depth)
-      : (last?.key ?? derived.block.id);
+    // with the band it was inserted into, not as a band of its own, which is
+    // what one group per inserted bullet would look like.
+    const key =
+      keyOf.get(derived.block.id) ??
+      anchorKey(derived) ??
+      last?.key ??
+      derived.block.id;
 
     if (last && last.key === key) last.blocks.push(derived);
     else groups.push({ key, depth, blocks: [derived] });

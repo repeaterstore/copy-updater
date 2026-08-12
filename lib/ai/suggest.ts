@@ -461,7 +461,9 @@ function validateOption(
         }
         ops.push(
           op.t === "replaceElement"
-            ? { ...op, html: assignNewIds(doc, sanitizeHtml(doc, op.html)) }
+            ? // The replacement may keep the id of what it replaces — that is
+              // the one id it is entitled to — but nothing else it copied.
+              { ...op, html: assignNewIds(doc, sanitizeHtml(doc, op.html), op.id) }
             : op,
         );
         break;

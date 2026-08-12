@@ -8,6 +8,7 @@ import {
   type DerivedBlock,
   type Section,
 } from "@/lib/workspace/derive";
+import { isNewId } from "@/lib/ops/ids";
 
 const ROLE_LABEL: Record<string, string> = {
   heading: "H",
@@ -218,6 +219,15 @@ export function OutlinePane({
     // something changed inside one of its subsections.
     const all = sectionBlocks(section);
     const changedHere = all.filter((d) => d.changed).length;
+    /*
+     * Insertions count as something to undo, even though they are not edits.
+     *
+     * An inserted block has nothing to diff against, so it is never `changed`
+     * — which left a layout suggestion that only adds copy with no revert
+     * control at all, and no way back short of deleting the version.
+     */
+    const addedHere = all.filter((d) => isNewId(d.block.id)).length;
+    const undoableHere = changedHere + addedHere;
     const commentsHere = all.filter((d) => commentCounts[d.block.id]).length;
 
     // A section the filters emptied is not shown at all — but it was still
@@ -267,11 +277,11 @@ export function OutlinePane({
               {/* Only where there is something to undo. Reverting a section a
                   block at a time meant a trip through the inspector for each
                   one, with no way at all to undo an inserted element. */}
-              {changedHere > 0 ? (
+              {undoableHere > 0 ? (
                 <button
                   type="button"
                   onClick={() => onRevertSection(all.map((d) => d.block.id))}
-                  title={`Discard all ${changedHere} change${changedHere === 1 ? "" : "s"} in this section`}
+                  title={`Discard all ${undoableHere} change${undoableHere === 1 ? "" : "s"} in this section`}
                   className="shrink-0 rounded px-1 py-1 text-[10px] text-[var(--color-ink-faint)] transition-colors hover:text-[var(--color-removed)]"
                 >
                   ↺
