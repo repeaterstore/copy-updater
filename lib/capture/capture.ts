@@ -209,6 +209,133 @@ async function exposeFetchFallback(page: Page): Promise<void> {
   );
 }
 
+/**
+ * Open collapsed disclosures — FAQ accordions, "read more" panels — so their
+ * copy is captured as visible.
+ *
+ * An FAQ answer is copy someone has to be able to read and rewrite, and behind
+ * a closed accordion it arrives measuring 0x0: filtered out of the outline,
+ * skipped by section scope, invisible in the screenshot. On waveform.com's
+ * bufferbloat page that is 76 of the FAQ's 91 blocks.
+ *
+ * Clicking rather than forcing CSS, because the site's own script is still
+ * running at this point and knows how to open its own widgets; scripts are not
+ * stripped until inlining. What is forced is `<details>`, which needs no script.
+ *
+ * Two exclusions, and the second is the important one. Site furniture is
+ * skipped by tag, and *also* by position: mega-menus are disclosures too, and
+ * on this Shopify theme the menu sits in plain divs that no tag test catches.
+ * Expanding it would put 224 blocks of navigation on screen and destroy the one
+ * signal that tells furniture from content — how little of it was ever visible.
+ */
+async function expandDisclosures(page: Page): Promise<{ clicked: number; revealed: number }> {
+  return page.evaluate(async () => {
+    const CHROME = "header, nav, footer, [role=\"banner\"], [role=\"navigation\"], [role=\"contentinfo\"]";
+    /** Everything this high on the page is site chrome, tagged as such or not. */
+    const CHROME_BAND_PX = 200;
+    /** A pathological page should not turn into thousands of clicks. */
+    const LIMIT = 200;
+
+    for (const el of Array.from(document.querySelectorAll("details:not([open])")).slice(0, LIMIT)) {
+      (el as HTMLDetailsElement).open = true;
+    }
+
+    const triggers = Array.from(
+      document.querySelectorAll<HTMLElement>('[aria-expanded="false"]'),
+    ).slice(0, LIMIT);
+
+    for (const trigger of triggers) {
+      if (trigger.closest(CHROME)) continue;
+
+      // A link goes somewhere; a disclosure does not. Anything with a real
+      // href is not worth the risk of navigating away mid-capture.
+      const href = trigger.getAttribute("href");
+      if (href && href !== "#" && !href.startsWith("#")) continue;
+
+      const box = trigger.getBoundingClientRect();
+      if (box.top + window.scrollY < CHROME_BAND_PX) continue;
+
+      // When the widget names what it controls, only open it if that panel is
+      // actually hidden — which keeps this to disclosures rather than every
+      // toggle, tab and menu button on the page.
+      const controls = trigger.getAttribute("aria-controls");
+      if (controls) {
+        const panel = document.getElementById(controls);
+        if (panel && panel.getClientRects().length > 0) continue;
+      }
+
+      try {
+        trigger.click();
+      } catch {
+        // A widget that throws on click is one to leave closed.
+      }
+    }
+
+    /*
+     * Accordions with no ARIA at all, which is what waveform.com's FAQ turned
+     * out to be: a visible question and a display:none answer as siblings, with
+     * a click handler and nothing else to identify it by.
+     *
+     * The signature used here is that pairing — a hidden run of text sitting
+     * next to a visible one. It is what separates an accordion panel from a
+     * modal or a mobile-only variant, which have no visible sibling making a
+     * promise about them.
+     */
+    const normalise = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
+
+    /*
+     * What the page already shows, so the same copy is not revealed twice.
+     *
+     * Responsive themes ship both a desktop and a mobile rendering of the same
+     * card and hide one by media query. Revealing that duplicate put "What Is
+     * Bufferbloat?" in the outline twice and left a copywriter guessing which
+     * one to edit. A panel whose words are already on screen is a variant; a
+     * panel whose words appear nowhere is hidden content.
+     */
+    const onScreen = new Set<string>();
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>("*"))) {
+      const text = normalise(el.textContent ?? "");
+      if (text.length >= 20 && el.getClientRects().length > 0) onScreen.add(text);
+    }
+
+    const revealed: HTMLElement[] = [];
+    for (const el of Array.from(document.querySelectorAll<HTMLElement>("*")).slice(0, 4000)) {
+      if (el.closest(CHROME)) continue;
+      if ((el.textContent ?? "").trim().length < 20) continue;
+      if (onScreen.has(normalise(el.textContent ?? ""))) continue;
+
+      const style = getComputedStyle(el);
+      const hidden =
+        style.display === "none" ||
+        style.maxHeight === "0px" ||
+        (style.height === "0px" && style.overflow === "hidden");
+      if (!hidden) continue;
+
+      // A hidden child of something already hidden comes back with its parent.
+      if (el.parentElement && getComputedStyle(el.parentElement).display === "none") continue;
+
+      const siblings = Array.from(el.parentElement?.children ?? []);
+      const hasVisibleTextSibling = siblings.some(
+        (sib) =>
+          sib !== el &&
+          (sib.textContent ?? "").trim().length > 0 &&
+          sib.getClientRects().length > 0,
+      );
+      if (!hasVisibleTextSibling) continue;
+
+      el.style.setProperty("display", "block", "important");
+      el.style.setProperty("max-height", "none", "important");
+      el.style.setProperty("height", "auto", "important");
+      el.style.setProperty("overflow", "visible", "important");
+      revealed.push(el);
+    }
+
+    // Let the site's own animations finish before anything is measured.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    return { clicked: triggers.length, revealed: revealed.length };
+  });
+}
+
 async function inlineWithSingleFile(page: Page): Promise<string> {
   const { script } = await loadSingleFileBundle();
   await page.addScriptTag({ content: script });
@@ -311,6 +438,10 @@ export async function capturePage(options: CaptureOptions): Promise<CaptureResul
 
     onProgress("settling");
     await settle(page, timeoutMs);
+
+    // Before extraction, so the opened panels are measured as visible and show
+    // up in the screenshot.
+    await expandDisclosures(page).catch(() => undefined);
 
     // Stamp ids and extract before inlining, so the ids end up baked into the
     // stored snapshot and the boxes match what the screenshot shows.

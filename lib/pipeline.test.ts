@@ -29,6 +29,7 @@ const FIXTURE = `<!doctype html>
     .hero__title { font-size: 40px; margin: 0 0 12px }
     .btn { display: inline-block; padding: 12px 20px; background: #2f6fed; color: #fff }
     .features li { margin: 6px 0 }
+    .faq__a { display: none }
   </style>
 </head><body>
   <main>
@@ -43,6 +44,22 @@ const FIXTURE = `<!doctype html>
         <li>Free shipping on every order</li>
         <li>Two year warranty included</li>
       </ul>
+    </section>
+    <section class="faq">
+      <h2>Frequently asked questions</h2>
+      <!-- A collapsed accordion with no ARIA and no <details>: a visible
+           question beside a display:none answer, which is how waveform.com's
+           FAQ is actually built. -->
+      <div class="faq__item">
+        <div class="faq__q">Do boosters work in a basement?</div>
+        <div class="faq__a">Yes, provided there is usable signal outdoors to amplify.</div>
+      </div>
+      <!-- Hidden and duplicated: the same words are already on screen above, so
+           this is a responsive variant rather than content to recover. -->
+      <div class="faq__item">
+        <div class="faq__q">Shipping</div>
+        <div class="faq__a variant">Free shipping on every order</div>
+      </div>
     </section>
   </main>
 </body></html>`;
@@ -145,6 +162,24 @@ test("capture → resolve → diff → export round trip", { timeout: 180_000 },
   assert.equal(warranty.sectionLabel, "Why choose us");
   // A paragraph with a link inside stays a single editable block.
   assert.match(sub.html, /<a[\s\S]*?>booster<\/a>/);
+  // A collapsed FAQ answer is captured *and* measured as visible: an accordion
+  // is opened before anything is measured, so the copy inside it is reachable
+  // in the outline, editable, and inside an AI request's scope. Left closed it
+  // came back 0x0 and was filtered out of all three.
+  const answer = blocks.find((b) => b.text.includes("usable signal outdoors"))!;
+  assert.ok(answer, "the collapsed FAQ answer was captured");
+  assert.ok(
+    answer.box && answer.box.w > 0 && answer.box.h > 0,
+    "the FAQ answer is measured as visible, not 0x0",
+  );
+
+  // The duplicate is a responsive variant, not hidden content: those words are
+  // already on screen in the features list, so revealing it would list the same
+  // copy twice and leave a reviewer guessing which one to edit.
+  const shippingBlocks = blocks.filter((b) => b.text.includes("Free shipping on every order"));
+  const visibleShipping = shippingBlocks.filter((b) => !b.box || (b.box.w > 0 && b.box.h > 0));
+  assert.equal(visibleShipping.length, 1, "the hidden duplicate stayed hidden");
+
   // Boxes come from a real layout pass.
   assert.ok((h1.box?.w ?? 0) > 0 && (h1.box?.h ?? 0) > 0, "h1 was measured");
 
