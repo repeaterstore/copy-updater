@@ -5,17 +5,58 @@ import type { PreviewFrameApi } from "@/lib/preview/use-preview-frame";
 
 export type Device = "desktop" | "mobile" | "both";
 
-/** The width the frame is really rendered at, so the page's own media queries fire. */
-const WIDTHS: Record<Exclude<Device, "both">, number> = { desktop: 1440, mobile: 390 };
-const HEIGHTS: Record<Exclude<Device, "both">, number> = { desktop: 900, mobile: 844 };
+/**
+ * A size the frame is really rendered at, so the page's own media queries fire.
+ *
+ * Breakpoints are the reason this is a list rather than one desktop width. A
+ * page that reads well at 1440 can collapse into a mess at 1024 — the width
+ * where two columns become one is exactly where copy that fitted stops
+ * fitting — and that is invisible until you look at it.
+ */
+export interface Viewport {
+  id: string;
+  label: string;
+  /** Shown next to the label; the number is what a reviewer recognises. */
+  width: number;
+  height: number;
+}
+
+export const WIDE_VIEWPORTS: Viewport[] = [
+  { id: "desktop", label: "Desktop", width: 1440, height: 900 },
+  { id: "laptop", label: "Laptop", width: 1280, height: 800 },
+  { id: "tablet", label: "Tablet", width: 1024, height: 768 },
+  { id: "tablet-portrait", label: "Tablet portrait", width: 768, height: 1024 },
+];
+
+export const MOBILE_VIEWPORT: Viewport = {
+  id: "mobile",
+  label: "Phone",
+  width: 390,
+  height: 844,
+};
+
+export const DEFAULT_WIDE_VIEWPORT = WIDE_VIEWPORTS[0];
+
+export function wideViewport(id: string): Viewport {
+  return WIDE_VIEWPORTS.find((v) => v.id === id) ?? DEFAULT_WIDE_VIEWPORT;
+}
 
 /** Zoom levels offered for the phone. 1 is life size. */
 export const PHONE_ZOOMS = [0.5, 0.75, 1, 1.25, 1.5] as const;
 
-/** Width the phone pane needs at a given zoom: the frame plus its bezel and padding. */
+/** Width the phone pane wants at a given zoom: the frame plus its bezel and padding. */
 export function phonePaneWidth(zoom: number): number {
-  return Math.round(WIDTHS.mobile * zoom) + 60;
+  return Math.round(MOBILE_VIEWPORT.width * zoom) + 60;
 }
+
+/**
+ * Narrowest either pane may be squeezed to before it stops being useful.
+ *
+ * Below roughly this the frame is scaled so far down that the copy is no
+ * longer legible, which defeats the point of showing it at all — better to let
+ * the two stack than to shrink both into illegibility.
+ */
+export const MIN_PANE_WIDTH = 260;
 
 /**
  * The snapshot iframe, rendered at a real device width and scaled to fit.
@@ -29,18 +70,30 @@ export function PreviewPane({
   frame,
   snapshotId,
   runtimeVersion,
-  device,
+  viewport,
+  phone = false,
   zoom = 1,
+  fit = false,
   loading,
 }: {
   frame: PreviewFrameApi;
   snapshotId: string;
   /** Content hash of the injected preview runtime; see the src below. */
   runtimeVersion: string;
-  /** A single frame is always one real device; "both" is two of these. */
-  device: Exclude<Device, "both">;
+  /** The size to render at; "both" is two of these panes. */
+  viewport: Viewport;
+  /** Draw the phone bezel rather than a browser-window border. */
+  phone?: boolean;
   /** Largest scale to draw at. Fitting the pane can still force it smaller. */
   zoom?: number;
+  /**
+   * Take only the height the scaled frame needs, rather than filling the pane.
+   *
+   * Stacked, two full-height panes would each scroll inside themselves inside
+   * a scrolling column — three scrollbars for two frames. Sized to content,
+   * there is one.
+   */
+  fit?: boolean;
   loading?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -53,7 +106,7 @@ export function PreviewPane({
     // Never larger than asked for, and never wider than the pane. Automatic
     // enlargement is still wrong — a phone blown up to fill a wide pane looks
     // nothing like a phone — but zoom is a deliberate choice, so it may.
-    const next = Math.min(zoom, available / WIDTHS[device]);
+    const next = Math.min(zoom, available / viewport.width);
     setScale((current) =>
       // Ignore hairline differences. Scale decides the content's size, and the
       // content's size decides whether a scrollbar appears, which changes the
@@ -61,7 +114,7 @@ export function PreviewPane({
       // chase each other around a render loop.
       Math.abs(current - next) < 0.005 ? current : next,
     );
-  }, [device, zoom]);
+  }, [viewport.width, zoom]);
 
   /*
    * Measured after every render, not only when the pane itself resizes.
@@ -83,13 +136,14 @@ export function PreviewPane({
     return () => observer.disconnect();
   }, [measure]);
 
-  const width = WIDTHS[device];
-  const height = HEIGHTS[device];
+  const { width, height } = viewport;
 
   return (
     <div
       ref={containerRef}
-      className="relative h-full overflow-auto bg-[var(--color-sunken)] p-4"
+      className={`relative bg-[var(--color-sunken)] p-4 ${
+        fit ? "overflow-x-auto" : "h-full overflow-auto"
+      }`}
     >
       {loading ? (
         <div className="absolute inset-0 z-10 grid place-items-center bg-[var(--color-sunken)]/70">
@@ -113,7 +167,7 @@ export function PreviewPane({
             transformOrigin: "top left",
           }}
           className={
-            device === "mobile"
+            phone
               ? // Rounded at the bottom only. A phone's screen curves at every
                 // corner, but the web page does not sit in the whole screen —
                 // in Safari it starts below the address bar against a straight
@@ -152,10 +206,37 @@ export function PreviewPane({
 }
 
 const DEVICE_HINT: Record<Device, string> = {
-  desktop: "Desktop only, 1440px",
-  mobile: "Mobile only, 390px",
-  both: "Desktop and mobile side by side — the phone stays near full size",
+  desktop: "The wide viewport only, at the width chosen beside this",
+  mobile: "The phone only, 390px",
+  both: "Both at once — side by side, or stacked when the pane is narrow",
 };
+
+/** Width picker for the wide frame: desktop, laptop, tablet, tablet portrait. */
+export function ViewportSelect({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <label className="flex items-center gap-1.5 text-xs text-[var(--color-ink-soft)]">
+      <span className="sr-only">Width</span>
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        title="Width the wide frame is rendered at, so the page's own breakpoints fire"
+        className="rounded-md border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-1.5 py-1 text-xs text-[var(--color-ink)]"
+      >
+        {WIDE_VIEWPORTS.map((v) => (
+          <option key={v.id} value={v.id}>
+            {v.label} · {v.width}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
 
 export function DeviceToggle({
   device,

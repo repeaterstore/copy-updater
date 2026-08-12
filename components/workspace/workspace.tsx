@@ -23,10 +23,15 @@ import { orderByLineage, SNAPSHOT_BASELINE, type LineageRow } from "@/lib/versio
 import { AiPanel, type AiConfig } from "./ai-panel";
 import { CommentPanel, type CommentItem } from "./comment-panel";
 import {
+  DEFAULT_WIDE_VIEWPORT,
   DeviceToggle,
+  MIN_PANE_WIDTH,
+  MOBILE_VIEWPORT,
   PHONE_ZOOMS,
   phonePaneWidth,
   PreviewPane,
+  ViewportSelect,
+  wideViewport,
   type Device,
 } from "./preview-pane";
 import { InspectorPane } from "./inspector-pane";
@@ -171,6 +176,35 @@ export function Workspace({
   const showCompanion = device === "both";
   /** Life size by default; the pane widens and narrows with this. */
   const [phoneZoom, setPhoneZoom] = useState(1);
+  /** Which width the wide frame renders at — desktop, laptop or tablet. */
+  const [wideId, setWideId] = useState(DEFAULT_WIDE_VIEWPORT.id);
+  const wide = wideViewport(wideId);
+
+  /**
+   * Side by side until there is not enough room, then stacked.
+   *
+   * Measured from the preview area rather than the window, because the two
+   * side panels are what actually take the space away: the same window is
+   * roomy with the inspector closed and cramped with it open. Below the
+   * threshold both frames would be scaled past legibility, and one above the
+   * other — each at the full width of the pane — reads better than two
+   * illegible columns.
+   */
+  const previewRef = useRef<HTMLElement | null>(null);
+  const [stacked, setStacked] = useState(false);
+  useEffect(() => {
+    const el = previewRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry.contentRect.width;
+      // Hysteresis: switching back exactly at the threshold would flip modes
+      // on every pixel of a drag, because the layout it switches to changes
+      // the width being measured.
+      setStacked((was) => (was ? width < MIN_PANE_WIDTH * 2 + 80 : width < MIN_PANE_WIDTH * 2));
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
 
   /**
    * Once the phone has been asked for, keep it mounted and just hide it.
@@ -477,6 +511,8 @@ export function Workspace({
         onDevice={setDevice}
         phoneZoom={phoneZoom}
         onPhoneZoom={setPhoneZoom}
+        wideId={wideId}
+        onWideId={setWideId}
         hasBefore={hasBefore}
         showingBefore={showingBefore}
         onShowBefore={setShowingBefore}
@@ -575,41 +611,71 @@ export function Workspace({
           />
         </aside>
 
-        <main className={`min-h-0 min-w-0 ${pane === "preview" ? "" : "hidden xl:block"}`}>
+        <main
+          ref={previewRef}
+          className={`min-h-0 min-w-0 ${pane === "preview" ? "" : "hidden xl:block"}`}
+        >
           {/* The primary frame keeps its place in the tree whatever the device
               is, so switching modes never remounts it — a remount means
               re-downloading a snapshot that can run to tens of megabytes. */}
-          {/* Always side by side — reading the same copy at two widths is the
-              point, and stacked it turns into scrolling between them. The phone
-              zoom is what makes this fit: at 50% it leaves nearly the whole
-              pane to the desktop frame. */}
-          <div className="flex h-full min-w-0 flex-row">
-            <div className="min-h-0 min-w-0 flex-1">
+          <div
+            className={`flex h-full min-h-0 min-w-0 ${
+              stacked && showCompanion ? "flex-col overflow-auto" : "flex-row"
+            }`}
+          >
+            <div
+              className="min-h-0 min-w-0"
+              // Grows into whatever the phone leaves, and shrinks in proportion
+              // to its own width rather than absorbing the whole squeeze: with
+              // the phone pinned to a fixed pixel width, narrowing the window
+              // used to shrink this frame alone until it was unreadable while
+              // the phone sat there unchanged.
+              style={
+                stacked && showCompanion
+                  ? undefined
+                  : { flex: `1 1 ${wide.width}px`, minWidth: MIN_PANE_WIDTH }
+              }
+            >
               <PreviewPane
                 frame={frame}
                 snapshotId={snapshotId}
                 runtimeVersion={runtimeVersion}
-                device={device === "both" ? "desktop" : device}
+                viewport={device === "mobile" ? MOBILE_VIEWPORT : wide}
+                phone={device === "mobile"}
                 zoom={device === "mobile" ? phoneZoom : 1}
+                fit={stacked && showCompanion}
                 loading={!frame.ready}
               />
             </div>
             {companionMounted ? (
-              // Exactly as wide as the phone needs at its current zoom, so the
-              // zoom control is what trades width between the two frames: at
-              // 50% the desktop frame gets nearly the whole pane back.
               <div
-                className={`h-full min-h-0 shrink-0 border-l border-[var(--color-line)] ${
+                className={`min-h-0 min-w-0 ${
                   showCompanion ? "" : "hidden"
+                } ${
+                  stacked && showCompanion
+                    ? "border-t border-[var(--color-line)]"
+                    : "h-full border-l border-[var(--color-line)]"
                 }`}
-                style={{ width: phonePaneWidth(phoneZoom) }}
+                // Its natural width when there is room — the zoom control is
+                // what trades width between the two frames — and no smaller
+                // than legible once there is not.
+                style={
+                  stacked && showCompanion
+                    ? undefined
+                    : {
+                        flex: `0 1 ${phonePaneWidth(phoneZoom)}px`,
+                        minWidth: Math.min(MIN_PANE_WIDTH, phonePaneWidth(phoneZoom)),
+                      }
+                }
               >
                 <PreviewPane
                   frame={companion}
                   snapshotId={snapshotId}
                   runtimeVersion={runtimeVersion}
-                  device="mobile"
+                  viewport={MOBILE_VIEWPORT}
+                  phone
                   zoom={phoneZoom}
+                  fit={stacked && showCompanion}
                   loading={!companion.ready}
                 />
               </div>
@@ -859,6 +925,8 @@ function Toolbar({
   onDevice,
   phoneZoom,
   onPhoneZoom,
+  wideId,
+  onWideId,
   onDiffMode,
   onEditMode,
   onSave,
@@ -885,6 +953,8 @@ function Toolbar({
   onDevice: (d: Device) => void;
   phoneZoom: number;
   onPhoneZoom: (zoom: number) => void;
+  wideId: string;
+  onWideId: (id: string) => void;
   onDiffMode: (on: boolean) => void;
   onEditMode: (on: boolean) => void;
   onSave: () => void;
@@ -988,6 +1058,9 @@ function Toolbar({
           />
         ) : null}
         <DeviceToggle device={device} onChange={onDevice} />
+        {device === "mobile" ? null : (
+          <ViewportSelect value={wideId} onChange={onWideId} />
+        )}
         {device === "desktop" ? null : (
           <label
             className="flex items-center gap-1 text-[11px] text-[var(--color-ink-soft)]"
