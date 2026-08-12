@@ -11,8 +11,9 @@ import {
   isVisible,
   sectionBlocks,
   sectionScopeFor,
+  structuralHighlights,
 } from "./derive";
-import type { Block } from "@/lib/ops/types";
+import type { Block, Op } from "@/lib/ops/types";
 
 const PAGE = `<!doctype html><html><body>
   <nav><div><a href="/a">Menu one</a></div><div><a href="/b">Menu two</a></div></nav>
@@ -329,4 +330,41 @@ test("furniture detection needs the hidden blocks, so grouping comes before filt
     false,
     "filtering first loses the evidence — OutlinePane must group the full list",
   );
+});
+
+test("an inserted block is listed next to what it was inserted against", () => {
+  const page = `<!doctype html><html><body>
+    <section><h2>Warranty</h2><ul><li>Two years</li></ul></section>
+  </body></html>`;
+  const blocks = withBoxes(blocksOf(page), () => true);
+  const anchor = blocks.find((b) => b.text === "Two years")!;
+  // What an insert op looks like once created: ids minted into the markup.
+  const ops: Op[] = [
+    { t: "insert", refId: anchor.id, pos: "after", html: '<li data-cu-id="new:aaaaaa">Free returns</li>' },
+  ];
+
+  const derived = deriveBlocks(blocks, ops);
+  const texts = derived.map((d) => d.text);
+  // On the page but missing from the outline was the bug: the preview applies
+  // insert ops, the derived list was built from the baseline alone.
+  assert.deepEqual(texts, ["Warranty", "Two years", "Free returns"]);
+
+  const inserted = derived.find((d) => d.text === "Free returns")!;
+  assert.equal(inserted.block.id, "new:aaaaaa");
+  assert.equal(inserted.changed, false, "added, not edited — nothing to word-diff against");
+});
+
+test("structural highlights come from the ops, without resolving anything", () => {
+  const ops: Op[] = [
+    { t: "insert", refId: "body/ul:1/li:1", pos: "after", html: '<li data-cu-id="new:bbbbbb">Added</li>' },
+    { t: "move", id: "body/p:2", refId: "body/p:1", pos: "before" },
+    { t: "remove", id: "body/p:3" },
+    { t: "setText", id: "body/h1:1", html: "Edited" },
+  ];
+
+  const { added, moved } = structuralHighlights(ops);
+  assert.deepEqual(added, ["new:bbbbbb"]);
+  assert.deepEqual(moved, ["body/p:2"]);
+  // Removals are not in there on purpose: the element is gone from the page,
+  // so the preview has nothing left to paint.
 });

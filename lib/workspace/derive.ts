@@ -89,7 +89,7 @@ export function deriveBlocks(baseline: Block[], ops: Op[]): DerivedBlock[] {
   const overrides = textOverrides(ops);
   const removed = new Set(ops.filter((o) => o.t === "remove").map((o) => o.id));
 
-  return baseline
+  const kept = baseline
     .filter((block) => !removed.has(block.id))
     .map((block) => {
       const html = overrides.get(block.id) ?? block.html;
@@ -107,6 +107,63 @@ export function deriveBlocks(baseline: Block[], ops: Op[]): DerivedBlock[] {
         layoutRisk: changed && growth !== null && growth >= LAYOUT_RISK_RATIO,
       };
     });
+
+  return withInserts(kept, ops);
+}
+
+/**
+ * Put inserted blocks into the list, next to what they were inserted against.
+ *
+ * They are on the page — the preview applies insert ops like any other — but
+ * derived from the baseline alone they were missing from the outline, so an
+ * added bullet appeared in the preview and nowhere in the list beside it.
+ *
+ * Placed adjacent to the anchor rather than exactly where the DOM puts them:
+ * firstChild and lastChild land inside a container whose position in a flat
+ * list of text blocks is not defined. Adjacent is right for reading order,
+ * which is what the outline is for.
+ */
+function withInserts(blocks: DerivedBlock[], ops: Op[]): DerivedBlock[] {
+  const inserts = ops.filter((op) => op.t === "insert");
+  if (inserts.length === 0) return blocks;
+
+  const next = [...blocks];
+  for (const op of inserts) {
+    if (op.t !== "insert") continue;
+    const id = insertedId(op);
+    if (!id || next.some((d) => d.block.id === id)) continue;
+
+    const text = htmlToText(op.html);
+    const derived: DerivedBlock = {
+      block: {
+        id,
+        tag: "div",
+        role: "other",
+        // The text, not the fragment's markup. Every other block's html is its
+        // innerHTML, and the inspector edits that field directly — handed the
+        // outer markup it showed the reviewer a <p> tag to edit.
+        html: text,
+        text,
+        order: 0,
+        sectionLabel: null,
+        classes: [],
+        // No capture-time geometry: it did not exist when the page was frozen.
+        box: null,
+      },
+      html: text,
+      text,
+      // Added, not edited. The word diff has nothing to compare it against.
+      changed: false,
+      words: null,
+      growth: null,
+      layoutRisk: false,
+    };
+
+    const anchor = next.findIndex((d) => d.block.id === op.refId);
+    if (anchor === -1) next.push(derived);
+    else next.splice(op.pos === "before" ? anchor : anchor + 1, 0, derived);
+  }
+  return next;
 }
 
 function toWordParts(before: string, after: string): WordPart[] {
@@ -117,11 +174,48 @@ function toWordParts(before: string, after: string): WordPart[] {
   }));
 }
 
-/** Ops that change structure and therefore need a save to render accurately. */
+/** Ops that change structure rather than wording. */
 export function structuralOps(ops: Op[]): Op[] {
   return ops.filter(
     (op) => op.t !== "setText" && op.t !== "setMeta",
   );
+}
+
+/**
+ * An inserted fragment's own id, read out of its markup.
+ *
+ * An insert op has no id field: ids are minted when the op is created and baked
+ * into the html string, so that replaying the list hands the same element the
+ * same id every time. The first one is the fragment's outermost element, which
+ * is the thing worth naming and marking.
+ */
+const FIRST_ID = /data-cu-id="([^"]+)"/;
+
+export function insertedId(op: Op): string | null {
+  if (op.t !== "insert") return null;
+  return FIRST_ID.exec(op.html)?.[1] ?? null;
+}
+
+/**
+ * Ids for the preview's diff colouring, taken straight from the ops.
+ *
+ * No resolution needed: the preview applies the same op list, so an inserted
+ * element is already in its DOM under the id baked into the op. Removals are
+ * deliberately absent — the element is gone from the page, so there is nothing
+ * left to paint. They show as a strikethrough row in the outline instead.
+ */
+export function structuralHighlights(ops: Op[]): { added: string[]; moved: string[] } {
+  const added: string[] = [];
+  const moved: string[] = [];
+  for (const op of ops) {
+    if (op.t === "insert") {
+      const id = insertedId(op);
+      if (id) added.push(id);
+    } else if (op.t === "move") {
+      moved.push(op.id);
+    }
+  }
+  return { added, moved };
 }
 
 export type ChromeKind = "nav" | "footer";

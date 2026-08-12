@@ -195,8 +195,9 @@ export function OutlinePane({
 
         {structuralCount > 0 ? (
           <p className="mb-2 rounded-md bg-[var(--color-moved-soft)] px-2 py-1.5 text-[11px] text-[var(--color-ink-soft)]">
-            {structuralCount} structural change{structuralCount === 1 ? "" : "s"} pending —
-            save to see them in the preview.
+            {structuralCount} structural change{structuralCount === 1 ? "" : "s"} — added and moved
+            blocks are marked in the preview. A removed block is gone from both the
+            page and this list; the export still records it.
           </p>
         ) : null}
 

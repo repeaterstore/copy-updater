@@ -8,6 +8,7 @@ import {
   deriveBlocks,
   metaOverrides,
   sectionScopeFor,
+  structuralHighlights,
   structuralOps,
   type DerivedBlock,
 } from "@/lib/workspace/derive";
@@ -254,17 +255,22 @@ export function Workspace({
     }
     const changed = derived.filter((d) => d.changed).map((d) => d.block.id);
     const risk = derived.filter((d) => d.layoutRisk).map((d) => d.block.id);
+    // Straight from the ops. The preview has already applied them, so an
+    // inserted element is in its DOM waiting to be marked — these were empty
+    // arrays, which is why layout mode's work arrived unannounced.
+    const { added, moved } = structuralHighlights(ops);
     const highlights = {
       changed,
-      added: [],
+      added,
+      // Nothing to paint: a removed element is no longer in the page.
       removed: [],
-      moved: [],
+      moved,
       layoutRisk: risk,
       comments: commentCounts,
     };
     frame.setDiffMode(true, highlights);
     if (showCompanion) companion.setDiffMode(true, highlights);
-  }, [diffMode, derived, commentCounts, frame, companion, showCompanion]);
+  }, [diffMode, derived, ops, commentCounts, frame, companion, showCompanion]);
 
   useEffect(() => {
     // Both frames follow the selection. Picking a section and then hunting for
