@@ -36,7 +36,7 @@ import {
   wideViewport,
   type Device,
 } from "./preview-pane";
-import { InspectorPane } from "./inspector-pane";
+import { InspectorPane, type Visibility } from "./inspector-pane";
 import { OutlinePane } from "./outline-pane";
 
 export interface WorkspaceVersion {
@@ -418,6 +418,80 @@ export function Workspace({
     [mergeOps],
   );
 
+  /**
+   * Show a block on one device only.
+   *
+   * Two marker classes plus one stylesheet, rather than an inline style: only a
+   * media query can say "not at this width", and inline styles cannot hold one.
+   *
+   * The breakpoint is 768px because that is where this tool's own viewports
+   * divide — the phone frame is 390 wide and the narrowest desktop frame is
+   * tablet portrait at 768 — so what the Mobile and Desktop toggles show is
+   * exactly what the rule does. It is also the common breakpoint in the themes
+   * these pages come from, which matters more: the export has to be a change a
+   * developer can implement, not one that only behaves inside the preview.
+   */
+  const VISIBILITY_CSS =
+    "@media (max-width: 767px) { .cu-only-desktop { display: none !important; } }\n" +
+    "@media (min-width: 768px) { .cu-only-mobile { display: none !important; } }";
+
+  const setVisibility = useCallback(
+    (id: string, mode: Visibility) => {
+      const block = derivedByIdRef.current.get(id)?.block;
+      if (!block) return;
+
+      setOps((current) => {
+        // The last setAttr wins when ops are replayed, so the current value is
+        // the last one recorded — or the captured page, if nothing set it.
+        const previous = [...current]
+          .reverse()
+          .find((op) => op.t === "setAttr" && op.id === id && op.name === "class");
+        const currentClasses =
+          previous && previous.t === "setAttr" && typeof previous.value === "string"
+            ? previous.value.split(/\s+/).filter(Boolean)
+            : block.classes;
+
+        const kept = currentClasses.filter(
+          (c) => c !== "cu-only-desktop" && c !== "cu-only-mobile",
+        );
+        const next =
+          mode === "both" ? kept : [...kept, mode === "desktop" ? "cu-only-desktop" : "cu-only-mobile"];
+
+        let ops = current.filter(
+          (op) => !(op.t === "setAttr" && op.id === id && op.name === "class"),
+        );
+
+        // Back to exactly what the page shipped with: record nothing, so the
+        // block stops reading as changed rather than carrying a no-op forever.
+        const value = next.join(" ");
+        if (value !== block.classes.join(" ")) {
+          ops = [...ops, { t: "setAttr", id, name: "class", value }];
+        }
+
+        /*
+         * The stylesheet exists only while something uses it.
+         *
+         * Carried per version rather than injected globally: a version is meant
+         * to be a complete description of its own changes, and one that relies
+         * on CSS the app happens to add would export as markup referencing
+         * classes nothing defines.
+         */
+        const stillUsed = ops.some(
+          (op) =>
+            op.t === "setAttr" &&
+            op.name === "class" &&
+            typeof op.value === "string" &&
+            /\bcu-only-(desktop|mobile)\b/.test(op.value),
+        );
+        ops = ops.filter((op) => !(op.t === "addStyle" && op.css === VISIBILITY_CSS));
+        if (stillUsed) ops = [{ t: "addStyle", css: VISIBILITY_CSS }, ...ops];
+
+        return ops;
+      });
+    },
+    [VISIBILITY_CSS],
+  );
+
   const changeMeta = useCallback(
     (patch: Partial<PageMeta>) => {
       setOps((current) => {
@@ -742,6 +816,7 @@ export function Workspace({
             onChangeBlock={upsertText}
             onChangeMeta={changeMeta}
             onRevertBlock={revertBlock}
+            onSetVisibility={setVisibility}
             readOnly={readOnly}
             aiSlot={
               <AiPanel

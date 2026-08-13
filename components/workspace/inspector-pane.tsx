@@ -23,6 +23,16 @@ function CharCount({ value, guide }: { value: number; guide?: number }) {
   );
 }
 
+/** Which devices a block is shown on. Mirrors the marker classes in Workspace. */
+export type Visibility = "both" | "desktop" | "mobile";
+
+/** Read a block's current setting back off the classes it is carrying. */
+export function visibilityOf(classes: string[]): Visibility {
+  if (classes.includes("cu-only-desktop")) return "desktop";
+  if (classes.includes("cu-only-mobile")) return "mobile";
+  return "both";
+}
+
 export function InspectorPane({
   selected,
   meta,
@@ -30,6 +40,7 @@ export function InspectorPane({
   onChangeBlock,
   onChangeMeta,
   onRevertBlock,
+  onSetVisibility,
   readOnly,
   aiSlot,
   commentSlot,
@@ -38,6 +49,8 @@ export function InspectorPane({
   meta: PageMeta;
   metaBaseline: PageMeta;
   onChangeBlock: (id: string, html: string) => void;
+  /** Restrict a block to one device, or put it back on both. */
+  onSetVisibility: (id: string, mode: Visibility) => void;
   onChangeMeta: (patch: Partial<PageMeta>) => void;
   onRevertBlock: (id: string) => void;
   readOnly: boolean;
@@ -63,6 +76,7 @@ export function InspectorPane({
       derived={selected}
       onChange={onChangeBlock}
       onRevert={onRevertBlock}
+      onSetVisibility={onSetVisibility}
       readOnly={readOnly}
       aiSlot={aiSlot}
       commentSlot={commentSlot}
@@ -94,6 +108,7 @@ function BlockEditor({
   derived,
   onChange,
   onRevert,
+  onSetVisibility,
   readOnly,
   aiSlot,
   commentSlot,
@@ -101,6 +116,7 @@ function BlockEditor({
   derived: DerivedBlock;
   onChange: (id: string, html: string) => void;
   onRevert: (id: string) => void;
+  onSetVisibility: (id: string, mode: Visibility) => void;
   readOnly: boolean;
   aiSlot?: React.ReactNode;
   commentSlot?: React.ReactNode;
@@ -115,6 +131,7 @@ function BlockEditor({
   }, [derived.html, showHtml]);
 
   const hasMarkup = /<[a-z][^>]*>/i.test(derived.block.html);
+  const visibility = visibilityOf(derived.block.classes);
   const [imageError, setImageError] = useState<string | null>(null);
 
   /**
@@ -279,6 +296,44 @@ function BlockEditor({
             </button>
           ) : null}
         </section>
+
+        {!readOnly ? (
+          <section className="border-b border-[var(--color-line)] p-3">
+            <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
+              Shows on
+            </p>
+            <div className="flex overflow-hidden rounded-lg border border-[var(--color-line-strong)]">
+              {(
+                [
+                  ["both", "Both"],
+                  ["desktop", "Desktop only"],
+                  ["mobile", "Mobile only"],
+                ] as const
+              ).map(([mode, label]) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => onSetVisibility(derived.block.id, mode)}
+                  aria-pressed={visibility === mode}
+                  className={`flex-1 px-2 py-1.5 text-[11px] transition-colors ${
+                    visibility === mode
+                      ? "bg-[var(--color-accent)] text-white"
+                      : "text-[var(--color-ink-soft)] hover:bg-[var(--color-sunken)]"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {visibility !== "both" ? (
+              <p className="mt-1.5 text-[10px] leading-snug text-[var(--color-ink-faint)]">
+                Hidden below 768px on desktop-only, and at 768px and above on mobile-only. Check it
+                with the Mobile and Desktop toggles above the preview. The rule travels with the
+                version and appears in the export.
+              </p>
+            ) : null}
+          </section>
+        ) : null}
 
         {derived.words ? (
           <section>
