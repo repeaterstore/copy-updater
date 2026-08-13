@@ -232,19 +232,37 @@ export function buildUserPrompt(context: SuggestContext): string {
           `The second is a reference: a picture of a section someone wants added.`
         : `ONE IMAGE IS ATTACHED. It is a reference: a picture of a section ` +
           `someone wants added.`) +
-        `\n\nThe reference is a brief, not an asset. Do not describe it, do not ` +
-        `reproduce it as an image, and do not position text over it. Read the ` +
-        `copy in it and write the section as real markup, using an insert op.\n` +
-        `Take the wording from the reference where the reference has wording, ` +
-        `and write in the page's voice where it only implies some. Placeholder ` +
-        `text in a mockup — lorem ipsum, "Your headline here", a competitor's ` +
-        `product name — is a slot to fill for this page, not copy to keep.\n` +
-        `Match the structure you can see: a heading and three cards is a ` +
-        `heading and three cards, and every line of text is its own element so ` +
-        `it can be edited on its own afterwards.\n` +
-        `Use the page's own class names from CLASSES ALREADY IN USE so the ` +
-        `section looks native. Do not invent a design system, and do not copy ` +
-        `class names out of the reference image.`,
+        `\n\nThis request is a transcription, not an optimisation. Everything ` +
+        `else in this prompt asks you to improve copy; for the reference ` +
+        `section, do not. Reproduce its wording exactly as it appears, ` +
+        `punctuation and capitalisation included. Keep every product name, ` +
+        `technology name and figure you can read — "Peplink", "SpeedFusion", ` +
+        `"$100/mo" — verbatim. The brand voice above does not override this: ` +
+        `these are someone's approved words, already signed off, and rewriting ` +
+        `them is the one thing this request is not asking for.\n` +
+        `The exception is text that is obviously a stand-in: lorem ipsum, ` +
+        `"Your headline here", another company's name where this page's belongs.\n\n` +
+        `The reference is a brief, not an asset. Do not describe it, do not ` +
+        `reproduce it as an image, and do not position text over it. Write the ` +
+        `section as real markup using an insert op, with every line of text as ` +
+        `its own element so it can be edited on its own afterwards. Reproduce ` +
+        `the structure you can see, including buttons, links and small print.\n\n` +
+        `STYLING. Prefer the page's own class names, listed under "existing ` +
+        `classes", so the section looks native. Where the reference shows ` +
+        `something the page has no class for — a dark card, a coloured button, ` +
+        `an icon row — write the CSS with an addStyle op and reference it with ` +
+        `your own class names. The general advice above to avoid addStyle does ` +
+        `not apply here: reproducing a design the page does not already have is ` +
+        `precisely the case it exists for, and a section that arrives as ` +
+        `unstyled text has not reproduced anything.\n\n` +
+        `PICTURES. You cannot recreate a photograph, and dropping it silently ` +
+        `loses the fact that the section needs one. Leave a gap instead: an ` +
+        `empty div, styled with a dashed border and roughly the proportions the ` +
+        `image occupies in the reference, containing one line naming what ` +
+        `belongs there — for example "Product photo: two routers, landscape". ` +
+        `Someone pastes the real image into that gap afterwards, so it must be ` +
+        `visible, obviously a placeholder, and hold the space the picture will ` +
+        `take.`,
     );
   }
 

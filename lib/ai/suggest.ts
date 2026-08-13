@@ -90,6 +90,36 @@ const TEMPERATURE_BY_SHAPE: Record<PromptShape, number> = {
 };
 
 /**
+ * The largest reasoning budget any request asks for. See BUDGET_BY_LEVEL.
+ *
+ * Anthropic counts thinking against the same ceiling as the answer, so an
+ * output limit at or below this leaves nothing to answer with.
+ */
+const MAX_REASONING_BUDGET = 12_000;
+
+/** Room for one option's worth of markup, generously. */
+const TOKENS_PER_OPTION = 6_000;
+
+/**
+ * How much the model is allowed to write.
+ *
+ * Left unset, this takes the provider's default, and on Anthropic that default
+ * sits below the reasoning budget a layout request asks for — the model spends
+ * its whole allowance thinking, stops mid-JSON, and the SDK reports only that
+ * no object was generated. That is the failure this exists to prevent, and it
+ * is why the floor has to clear MAX_REASONING_BUDGET rather than merely be
+ * "large": the thinking is charged against this number before a single token of
+ * the answer is.
+ *
+ * A ceiling is not a target. Nothing is billed for room that goes unused, so
+ * the cost of being generous here is zero and the cost of being tight is a
+ * request that fails after the reviewer has waited for it.
+ */
+function outputCeilingFor(optionCount: number): number {
+  return MAX_REASONING_BUDGET + TOKENS_PER_OPTION * Math.max(1, optionCount);
+}
+
+/**
  * Flat wire shape for an op, deliberately not a discriminated union.
  *
  * A union compiles to JSON Schema `oneOf`, and Anthropic's structured output
@@ -249,7 +279,19 @@ export async function generateSuggestions(
     input.scopeKind === "meta"
       ? pageSummaryFor(input.allBlocks)
       : neighboursFor(input.allBlocks, scope);
-  const temperature = TEMPERATURE_BY_SHAPE[input.shape];
+  /*
+   * A reference image makes the request a faithfulness job, whatever shape it
+   * was sent as.
+   *
+   * Optimize runs at 0.85 to explore, which is right when the ask is "improve
+   * this" and wrong when it is "reproduce that". Asked to add a section from a
+   * screenshot at exploring temperature, the model returned the structure
+   * accurately and rewrote every line of approved copy on the way past —
+   * including dropping the product names out of it.
+   */
+  const temperature = input.referenceImage
+    ? TEMPERATURE_BY_SHAPE.directives
+    : TEMPERATURE_BY_SHAPE[input.shape];
 
   const prompt =
     buildUserPrompt({
@@ -305,6 +347,7 @@ export async function generateSuggestions(
           schema: z.object({ options: z.array(schema) }),
           system,
           messages: buildMessages(prompt, input.screenshot, input.referenceImage),
+          maxOutputTokens: outputCeilingFor(input.optionCount),
           abortSignal: input.abortSignal,
           ...(attempt.temperature !== undefined ? { temperature: attempt.temperature } : {}),
         });
@@ -513,7 +556,37 @@ function validateOption(
 
 export function describeAiError(error: unknown): string {
   if (NoObjectGeneratedError.isInstance(error)) {
-    return "The model did not return a usable result. Try again, or lower the number of options.";
+    /*
+     * The one failure where the model had something to say and we threw it
+     * away.
+     *
+     * "Did not return a usable result" is true of a refusal, a truncation, a
+     * provider ignoring the schema and a model answering in prose, and it sends
+     * everyone to guess at which. The SDK hands us the raw text, the finish
+     * reason and the usage; none of it was going anywhere before this. The log
+     * gets all of it, and the reviewer gets the part they can act on.
+     */
+    console.error("[ai] model returned no usable object", {
+      finishReason: error.finishReason,
+      usage: error.usage,
+      text: error.text?.slice(0, 2000),
+    });
+
+    // Truncation, which reads as gibberish rather than as running out of room.
+    if (error.finishReason === "length") {
+      return (
+        "The model ran out of room before finishing. Ask for fewer options, or " +
+        "narrow the scope to a smaller part of the page."
+      );
+    }
+
+    const said = error.text?.trim();
+    if (said) {
+      const excerpt = said.length > 240 ? `${said.slice(0, 240)}…` : said;
+      return `The model answered in prose instead of changes. It said: ${excerpt}`;
+    }
+
+    return "The model returned nothing at all. Try again, or pick a different model.";
   }
   const message = error instanceof Error ? error.message : String(error);
   if (/401|unauthor|invalid.*api.?key|no auth/i.test(message)) {
