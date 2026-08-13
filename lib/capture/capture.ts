@@ -350,8 +350,26 @@ async function expandDisclosures(page: Page): Promise<{ clicked: number; reveale
      */
     const OVERLAY = '[role="dialog"], [role="alertdialog"], [aria-modal="true"], dialog';
 
+    /*
+     * Elements the browser never lays out, which match the accordion signature
+     * perfectly and must not.
+     *
+     * `<head>` is the worst of them: its textContent is every inlined
+     * stylesheet on the page, so it clears the length threshold easily, it has
+     * no box, and `<body>` is a visible sibling making the promise the test
+     * looks for. Forcing it open renders the site's own CSS as copy across the
+     * top of the snapshot. A `<style>` inside `<body>` does the same thing on a
+     * smaller scale, and neither is inside `<body>` in the case that matters,
+     * so both tests are needed rather than either alone.
+     */
+    const NON_RENDERED = new Set([
+      "HEAD", "STYLE", "SCRIPT", "TITLE", "META", "LINK", "BASE", "TEMPLATE", "NOSCRIPT",
+    ]);
+
     const revealed: HTMLElement[] = [];
     for (const { el, text: normalised } of scanned) {
+      if (NON_RENDERED.has(el.tagName)) continue;
+      if (!document.body.contains(el)) continue;
       if (el.closest(CHROME)) continue;
       if (el.closest(OVERLAY)) continue;
       // A direct child of body is a page region or an overlay, never a panel
@@ -360,8 +378,17 @@ async function expandDisclosures(page: Page): Promise<{ clicked: number; reveale
       if (onScreen.has(normalised)) continue;
 
       const style = getComputedStyle(el);
-      // Positioned out of flow: it is placed over the page rather than in it.
-      if (style.position === "fixed") continue;
+      /*
+       * Positioned out of flow: it is placed over the page rather than in it.
+       *
+       * `absolute` counts as much as `fixed`. waveform.com's mobile drawer is
+       * an `inset-0 z-20` absolute panel in plain divs — no dialog role, no
+       * `<nav>` tag, and static ancestors — so every guard above it missed, and
+       * forcing it open laid a full-viewport menu over the whole capture. It is
+       * also right on its own terms: a panel taken out of flow cannot push the
+       * copy below it down, so revealing one can only ever overlap the page.
+       */
+      if (style.position === "fixed" || style.position === "absolute") continue;
       const hidden =
         style.display === "none" ||
         style.maxHeight === "0px" ||
@@ -537,3 +564,4 @@ export async function capturePage(options: CaptureOptions): Promise<CaptureResul
     await browser?.close().catch(() => undefined);
   }
 }
+
