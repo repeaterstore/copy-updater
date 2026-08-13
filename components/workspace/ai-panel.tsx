@@ -70,6 +70,70 @@ export function AiPanel({
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
+  /**
+   * A picture of the section someone wants, held for this request only.
+   *
+   * Deliberately not persisted. What survives is the markup the model writes
+   * from it, saved as ops like any other change — so a colleague opening the
+   * version sees the section, just not the screenshot it came from.
+   */
+  const [reference, setReference] = useState<{ dataUrl: string; label: string } | null>(null);
+  const fileInput = useRef<HTMLInputElement | null>(null);
+
+  /**
+   * Downscale before the image ever reaches the request body.
+   *
+   * A screenshot off a 4K monitor is around 3840px wide and several megabytes,
+   * which is bytes spent on detail no model needs to read a headline. The
+   * server caps it again on arrival — this is about not sending it twice over
+   * a connection someone is waiting on.
+   */
+  const loadReference = (file: File) => {
+    if (!file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const image = new Image();
+      image.onload = () => {
+        const MAX_EDGE = 1600;
+        const scale = Math.min(1, MAX_EDGE / Math.max(image.width, image.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(image.width * scale);
+        canvas.height = Math.round(image.height * scale);
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        setReference({
+          // PNG rather than JPEG: the model has to read the words in this, and
+          // JPEG artefacts land hardest on small text against flat colour,
+          // which is most of what a marketing section is.
+          dataUrl: canvas.toDataURL("image/png"),
+          label: file.name || `Pasted image · ${canvas.width}×${canvas.height}`,
+        });
+      };
+      image.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  /**
+   * Paste anywhere in the panel, without stealing an ordinary text paste.
+   *
+   * The instructions box lives inside this element, so this fires for text too.
+   * It acts only when the clipboard actually carries an image and never calls
+   * preventDefault otherwise, which leaves pasting a list of directives exactly
+   * as it was.
+   */
+  const onPaste = (event: React.ClipboardEvent) => {
+    const item = Array.from(event.clipboardData?.items ?? []).find((i) =>
+      i.type.startsWith("image/"),
+    );
+    if (!item) return;
+    const file = item.getAsFile();
+    if (!file) return;
+    event.preventDefault();
+    loadReference(file);
+  };
+
   if (!config.configured) {
     return (
       <section className="border-t border-[var(--color-line)] pt-3">
@@ -151,6 +215,7 @@ export function AiPanel({
             allModels,
             brandVoiceId: voiceId === VOICE_CUSTOM || voiceId === VOICE_NONE ? null : voiceId,
             customBrandVoice: voiceId === VOICE_CUSTOM ? customVoice.trim() || null : null,
+            referenceImage: reference?.dataUrl ?? null,
           }),
         });
         /*
@@ -208,7 +273,7 @@ export function AiPanel({
   const stop = () => inFlight.current?.abort();
 
   return (
-    <section className="border-t border-[var(--color-line)] pt-3">
+    <section className="border-t border-[var(--color-line)] pt-3" onPaste={onPaste}>
       <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
         AI suggestions
       </p>
@@ -325,6 +390,78 @@ export function AiPanel({
             to reuse a house style across pages.
           </p>
         ) : null}
+
+        {/* Above the instructions box, because the picture is the direction on
+            a request that has one, and the typed note is the qualifier. */}
+        <div>
+          <span className="mb-1 block text-[10px] font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
+            Reference image
+          </span>
+
+          {reference ? (
+            <div className="flex items-start gap-2 rounded-md border border-[var(--color-line)] p-2">
+              {/* eslint-disable-next-line @next/next/no-img-element -- a data URL
+                  held in memory for one request; next/image wants a real src. */}
+              <img
+                src={reference.dataUrl}
+                alt="The section you want added"
+                className="h-14 w-20 shrink-0 rounded border border-[var(--color-line)] object-cover"
+              />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[11px]">{reference.label}</p>
+                <p className="mt-0.5 text-[10px] leading-snug text-[var(--color-ink-faint)]">
+                  Sent with this request only. Not saved.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReference(null)}
+                className="shrink-0 rounded px-1 py-0.5 text-[10px] text-[var(--color-ink-faint)] transition-colors hover:text-[var(--color-removed)]"
+              >
+                Remove
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => fileInput.current?.click()}
+              className="w-full rounded-md border border-dashed border-[var(--color-line-strong)] px-2 py-2.5 text-[11px] text-[var(--color-ink-faint)] transition-colors hover:border-[var(--color-accent)] hover:text-[var(--color-ink)]"
+            >
+              Paste a screenshot (Ctrl+V), or click to choose a file
+            </button>
+          )}
+
+          <input
+            ref={fileInput}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) loadReference(file);
+              // Cleared so choosing the same file twice fires onChange again.
+              e.target.value = "";
+            }}
+          />
+
+          {/* Copy mode permits setText and setMeta and nothing else, so a
+              request built around adding a section cannot produce one. Said
+              here rather than switching automatically, which would quietly
+              widen what the model is allowed to do to the page. */}
+          {reference && mode === "copy" ? (
+            <p className="mt-1.5 rounded-md bg-[var(--color-changed-soft)] px-2 py-1.5 text-[10px] leading-snug text-[var(--color-ink-soft)]">
+              Copy only mode can reword what is already there, not add anything.{" "}
+              <button
+                type="button"
+                onClick={() => setMode("layout")}
+                className="underline underline-offset-2"
+              >
+                Switch to Copy + layout
+              </button>{" "}
+              to add this as a section.
+            </p>
+          ) : null}
+        </div>
 
         <textarea
           rows={shape === "directives" ? 5 : 2}
@@ -623,3 +760,4 @@ function Segmented<T extends string>({
     </div>
   );
 }
+
