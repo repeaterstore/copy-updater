@@ -67,6 +67,13 @@ export interface SuggestInput {
   meta: Parameters<typeof buildUserPrompt>[0]["meta"];
   cssIndex: Record<string, string[]>;
   screenshot?: Buffer | null;
+  /**
+   * A picture of the section someone wants, pasted in for this request only.
+   *
+   * Not stored anywhere. It is a brief, not an asset: what survives the request
+   * is the markup the model writes from it, saved as ops like any other change.
+   */
+  referenceImage?: Buffer | null;
 }
 
 /**
@@ -261,6 +268,8 @@ export async function generateSuggestions(
       webSearch: input.webSearch,
       scopeKind: input.scopeKind,
       sectionLabel: input.sectionLabel,
+      hasPageImage: Boolean(input.screenshot),
+      hasReferenceImage: Boolean(input.referenceImage),
     });
 
   const run = async (modelId: string): Promise<SuggestOption[]> => {
@@ -295,7 +304,7 @@ export async function generateSuggestions(
           model: await buildCurrentModel(modelId),
           schema: z.object({ options: z.array(schema) }),
           system,
-          messages: buildMessages(prompt, input.screenshot),
+          messages: buildMessages(prompt, input.screenshot, input.referenceImage),
           abortSignal: input.abortSignal,
           ...(attempt.temperature !== undefined ? { temperature: attempt.temperature } : {}),
         });
@@ -381,11 +390,21 @@ export async function generateSuggestions(
   return { modelId: models.join(", "), options };
 }
 
+/**
+ * Order is load-bearing when there are two images.
+ *
+ * Nothing labels an image part, so the only thing telling the model which
+ * picture is the page and which is the reference is the order they arrive in
+ * and the sentence in the prompt that describes that order. The prompt is built
+ * from the same two flags, so the two cannot drift apart.
+ */
 function buildMessages(
   prompt: string,
   screenshot: Buffer | null | undefined,
+  referenceImage?: Buffer | null,
 ): ModelMessage[] {
-  if (!screenshot) {
+  const images = [screenshot, referenceImage].filter((b): b is Buffer => Boolean(b));
+  if (images.length === 0) {
     return [{ role: "user", content: prompt }];
   }
   return [
@@ -394,7 +413,11 @@ function buildMessages(
       content: [
         { type: "text", text: prompt },
         // A "file" part, not the deprecated "image" part, which v7 warns about.
-        { type: "file", mediaType: "image/png", data: new Uint8Array(screenshot) },
+        ...images.map((image) => ({
+          type: "file" as const,
+          mediaType: "image/png",
+          data: new Uint8Array(image),
+        })),
       ],
     },
   ];
@@ -519,3 +542,4 @@ export function describeAiError(error: unknown): string {
   }
   return message;
 }
+

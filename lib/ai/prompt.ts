@@ -27,6 +27,10 @@ export interface SuggestContext {
   sectionHtml?: string | null;
   /** Whether the model may search the web on this request. */
   webSearch?: boolean;
+  /** A crop of the page as captured, sent as the first image. */
+  hasPageImage?: boolean;
+  /** A picture of the section someone wants, sent as the last image. */
+  hasReferenceImage?: boolean;
   /** What the scope represents, which changes what a good answer looks like. */
   scopeKind?: "block" | "section" | "page" | "meta";
   /** Heading the section sits under, when scopeKind is "section". */
@@ -212,6 +216,38 @@ export function buildUserPrompt(context: SuggestContext): string {
     );
   }
 
+  /*
+   * Only described when a reference image is attached.
+   *
+   * The page crop has always been sent without comment and models handle it
+   * fine, so saying nothing is the established behaviour for an ordinary
+   * request and this must not change it. Two unlabelled images is a different
+   * matter: nothing in the payload says which is which, so the order has to be
+   * stated, and it has to match the order buildMessages actually sends.
+   */
+  if (context.hasReferenceImage) {
+    sections.push(
+      (context.hasPageImage
+        ? `TWO IMAGES ARE ATTACHED. The first is the page as it stands today. ` +
+          `The second is a reference: a picture of a section someone wants added.`
+        : `ONE IMAGE IS ATTACHED. It is a reference: a picture of a section ` +
+          `someone wants added.`) +
+        `\n\nThe reference is a brief, not an asset. Do not describe it, do not ` +
+        `reproduce it as an image, and do not position text over it. Read the ` +
+        `copy in it and write the section as real markup, using an insert op.\n` +
+        `Take the wording from the reference where the reference has wording, ` +
+        `and write in the page's voice where it only implies some. Placeholder ` +
+        `text in a mockup — lorem ipsum, "Your headline here", a competitor's ` +
+        `product name — is a slot to fill for this page, not copy to keep.\n` +
+        `Match the structure you can see: a heading and three cards is a ` +
+        `heading and three cards, and every line of text is its own element so ` +
+        `it can be edited on its own afterwards.\n` +
+        `Use the page's own class names from CLASSES ALREADY IN USE so the ` +
+        `section looks native. Do not invent a design system, and do not copy ` +
+        `class names out of the reference image.`,
+    );
+  }
+
   if (context.optionCount === 1) {
     sections.push(`Return exactly one option.`);
   } else {
@@ -289,3 +325,4 @@ export function neighboursFor(
 
   return all.slice(lo, hi).filter((b) => !scopeIds.has(b.id));
 }
+

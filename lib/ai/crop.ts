@@ -98,6 +98,52 @@ export async function cropToBlocks(
 }
 
 /**
+ * Longest side of a pasted reference image.
+ *
+ * A screenshot off a 4K monitor arrives around 3840px wide and buys nothing at
+ * that size: the model has to read the words in it, and text is legible well
+ * below native resolution. 1600 is comfortably above the width at which body
+ * copy stops being readable, and roughly a fifth of the bytes.
+ */
+const REFERENCE_MAX_EDGE = 1600;
+
+/**
+ * Normalise an image someone pasted in, before it goes to a model.
+ *
+ * The browser already downscales on paste, so in the ordinary case this is a
+ * re-encode and nothing more. It runs anyway because the request body is not
+ * something to take on trust: this is the only place that decides how large an
+ * image the server will forward, whatever arrived.
+ *
+ * Returns null when the image cannot be made to fit, which the caller treats as
+ * "no reference image" rather than as a failed request. Losing the picture is
+ * worth telling someone about; throwing away a request they waited for is not.
+ */
+export async function prepareReferenceImage(image: Buffer): Promise<Buffer | null> {
+  try {
+    const { width, height } = await sharp(image).metadata();
+    if (!width || !height) return null;
+
+    const longest = Math.max(width, height);
+    const resized =
+      longest > REFERENCE_MAX_EDGE
+        ? await sharp(image)
+            .resize({
+              width: width >= height ? REFERENCE_MAX_EDGE : undefined,
+              height: height > width ? REFERENCE_MAX_EDGE : undefined,
+            })
+            .png()
+            .toBuffer()
+        : await sharp(image).png().toBuffer();
+
+    return withinBudget(resized);
+  } catch {
+    // Not an image, or one sharp cannot read. Same answer either way.
+    return null;
+  }
+}
+
+/**
  * Downscale until the image fits the provider budget, or give up on it.
  *
  * A tall section can still be large after cropping. Halving the resolution
@@ -119,3 +165,4 @@ async function withinBudget(image: Buffer): Promise<Buffer | null> {
   }
   return current.length > MAX_BYTES ? null : current;
 }
+
