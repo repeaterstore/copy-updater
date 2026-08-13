@@ -10,7 +10,7 @@
 import { eq } from "drizzle-orm";
 import { db, schema } from "@/db";
 import type { AiMode, ReasoningLevel } from "@/db/schema";
-import { cropToBlocks } from "@/lib/ai/crop";
+import { cropToBlocks, prepareReferenceImage } from "@/lib/ai/crop";
 import { loadSettings } from "@/lib/ai/openrouter";
 import { describeAiError, generateSuggestions, type SuggestOption } from "@/lib/ai/suggest";
 import { resolveBrandVoice } from "@/lib/ai/voices";
@@ -33,6 +33,44 @@ export interface SuggestRequest {
   allModels: boolean;
   brandVoiceId?: string | null;
   customBrandVoice?: string | null;
+  /**
+   * A pasted picture of a section someone wants, as a `data:image/…;base64,…`
+   * URL. Used for this request and never written anywhere: what persists is
+   * the markup the model returns, saved as ops like any other change.
+   */
+  referenceImage?: string | null;
+}
+
+/**
+ * Ceiling on the encoded reference image, before decoding.
+ *
+ * The browser downscales on paste, so anything arriving near this came from
+ * somewhere other than the panel. Refusing it costs a copywriter nothing and
+ * keeps an ordinary request body from being a way to hand the server 40 MB.
+ * Base64 runs about a third larger than the bytes it encodes, hence the margin
+ * over what `prepareReferenceImage` will actually forward.
+ */
+const MAX_REFERENCE_CHARS = 12_000_000;
+
+/**
+ * Decode a pasted data URL, or return null.
+ *
+ * Null every time rather than an error: an unreadable picture should cost the
+ * picture, not the request behind it. The one thing worth refusing outright is
+ * a payload large enough to be a problem in itself.
+ */
+async function decodeReferenceImage(value: string | null | undefined) {
+  if (!value) return null;
+  if (value.length > MAX_REFERENCE_CHARS) return null;
+
+  const match = /^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i.exec(value.trim());
+  if (!match) return null;
+
+  try {
+    return await prepareReferenceImage(Buffer.from(match[2], "base64"));
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -134,6 +172,8 @@ export async function POST(request: Request) {
     }
   }
 
+  const referenceImage = await decodeReferenceImage(input.referenceImage);
+
   const reasoningLevel = reasoningFor(settings.reasoningLevel, input.mode, input.shape);
   const brandVoice = await resolveBrandVoice({
     brandVoiceId: input.brandVoiceId ?? null,
@@ -188,6 +228,7 @@ export async function POST(request: Request) {
           meta,
           cssIndex: snapshot.cssIndex,
           screenshot,
+          referenceImage,
           abortSignal: request.signal,
           // The point of the stream: an option goes out the moment it is
           // complete, rather than when its siblings and the other models are.
@@ -268,3 +309,4 @@ export async function POST(request: Request) {
     },
   });
 }
+
