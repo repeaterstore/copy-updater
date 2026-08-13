@@ -115,6 +115,77 @@ function BlockEditor({
   }, [derived.html, showHtml]);
 
   const hasMarkup = /<[a-z][^>]*>/i.test(derived.block.html);
+  const [imageError, setImageError] = useState<string | null>(null);
+
+  /**
+   * Paste a picture into a block, most often one of the gaps a reference-image
+   * suggestion leaves behind.
+   *
+   * The image is inlined as a data URL rather than uploaded, which is what lets
+   * this exist at all: it rides along in the block's html, saved as an ordinary
+   * setText op, so it survives, forks, diffs and reaches whoever opens the
+   * version next. Nothing new stores anything.
+   *
+   * That is also why it is downscaled hard first. The bytes end up in the
+   * version's op list, replayed on every resolve and sent down the wire on
+   * every open — so this trades resolution, which a copy review does not need,
+   * for a payload that stays reasonable. JPEG rather than PNG for the same
+   * reason: a photograph is several times smaller as JPEG, and this path is
+   * for photographs.
+   */
+  const MAX_IMAGE_EDGE = 1200;
+  const MAX_ENCODED_CHARS = 600_000;
+
+  const pasteImage = (file: File) => {
+    setImageError(null);
+    const reader = new FileReader();
+    reader.onload = () => {
+      const image = new Image();
+      image.onload = () => {
+        const scale = Math.min(1, MAX_IMAGE_EDGE / Math.max(image.width, image.height));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.round(image.width * scale);
+        canvas.height = Math.round(image.height * scale);
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+
+        if (dataUrl.length > MAX_ENCODED_CHARS) {
+          setImageError(
+            "That image is too large to embed even after resizing. Crop it, or save it at a smaller size.",
+          );
+          return;
+        }
+
+        // Replaces the gap rather than sitting inside it: a placeholder is a
+        // labelled hole, and keeping its wording next to the picture that fills
+        // it reads as a caption nobody wrote.
+        const html =
+          `<img src="${dataUrl}" alt="" ` +
+          `style="display:block;max-width:100%;height:auto" />`;
+        setDraft(html);
+        onChange(derived.block.id, html);
+      };
+      image.onerror = () => setImageError("That file could not be read as an image.");
+      image.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const onPaste = (event: React.ClipboardEvent) => {
+    if (readOnly) return;
+    const item = Array.from(event.clipboardData?.items ?? []).find((i) =>
+      i.type.startsWith("image/"),
+    );
+    if (!item) return;
+    const file = item.getAsFile();
+    if (!file) return;
+    // Only when the clipboard really holds a picture, so pasting text into the
+    // editor behaves exactly as it always has.
+    event.preventDefault();
+    pasteImage(file);
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -179,11 +250,24 @@ function BlockEditor({
             style={showHtml ? { fontFamily: "var(--font-mono)", fontSize: "0.75rem" } : undefined}
             value={draft}
             readOnly={readOnly}
+            onPaste={onPaste}
             onChange={(e) => {
               setDraft(e.target.value);
               onChange(derived.block.id, e.target.value);
             }}
           />
+
+          {!readOnly ? (
+            <p className="mt-1 text-[10px] text-[var(--color-ink-faint)]">
+              Paste an image here (Ctrl+V) to drop a picture into this block.
+            </p>
+          ) : null}
+
+          {imageError ? (
+            <p className="mt-1 rounded-md bg-[var(--color-removed-soft)] px-2 py-1.5 text-[10px] leading-snug text-[var(--color-removed)]">
+              {imageError}
+            </p>
+          ) : null}
 
           {derived.changed && !readOnly ? (
             <button
@@ -295,3 +379,4 @@ function MetaEditor({
     </div>
   );
 }
+
