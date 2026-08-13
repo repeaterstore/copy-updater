@@ -36,7 +36,7 @@ import {
   wideViewport,
   type Device,
 } from "./preview-pane";
-import { InspectorPane, type Visibility } from "./inspector-pane";
+import { InspectorPane, visibilityOf, type Visibility } from "./inspector-pane";
 import { OutlinePane } from "./outline-pane";
 
 export interface WorkspaceVersion {
@@ -51,6 +51,38 @@ export interface WorkspaceVersion {
 }
 
 type Pane = "outline" | "preview" | "inspector";
+
+/**
+ * The stylesheet a version carries while any block is restricted to one device.
+ *
+ * The breakpoint is 768px because that is where this tool's own frames divide —
+ * the phone is 390 wide and the narrowest desktop frame is tablet portrait at
+ * 768 — so the Mobile and Desktop toggles show exactly what the rule does, with
+ * no width falling between the two.
+ */
+const VISIBILITY_CSS =
+  "@media (max-width: 767px) { .cu-only-desktop { display: none !important; } }\n" +
+  "@media (min-width: 768px) { .cu-only-mobile { display: none !important; } }";
+
+/**
+ * The classes a block is carrying right now, unsaved edits included.
+ *
+ * `deriveBlocks` resolves setText and setMeta client-side and leaves everything
+ * structural — setAttr among it — for the server, so `block.classes` still
+ * describes the captured page until a save round-trips. Reading the class off
+ * it made the Shows on control report "Both" however many times it had been
+ * changed: the preview obeyed the op, the buttons denied it existed, and there
+ * was no way to tell which device a block was set to.
+ */
+function classesNow(ops: Op[], block: Block): string[] {
+  const last = [...ops]
+    .reverse()
+    .find((op) => op.t === "setAttr" && op.id === block.id && op.name === "class");
+  if (last && last.t === "setAttr" && typeof last.value === "string") {
+    return last.value.split(/\s+/).filter(Boolean);
+  }
+  return block.classes;
+}
 
 export function Workspace({
   pageId,
@@ -423,35 +455,14 @@ export function Workspace({
    *
    * Two marker classes plus one stylesheet, rather than an inline style: only a
    * media query can say "not at this width", and inline styles cannot hold one.
-   *
-   * The breakpoint is 768px because that is where this tool's own viewports
-   * divide — the phone frame is 390 wide and the narrowest desktop frame is
-   * tablet portrait at 768 — so what the Mobile and Desktop toggles show is
-   * exactly what the rule does. It is also the common breakpoint in the themes
-   * these pages come from, which matters more: the export has to be a change a
-   * developer can implement, not one that only behaves inside the preview.
    */
-  const VISIBILITY_CSS =
-    "@media (max-width: 767px) { .cu-only-desktop { display: none !important; } }\n" +
-    "@media (min-width: 768px) { .cu-only-mobile { display: none !important; } }";
-
   const setVisibility = useCallback(
     (id: string, mode: Visibility) => {
       const block = derivedByIdRef.current.get(id)?.block;
       if (!block) return;
 
       setOps((current) => {
-        // The last setAttr wins when ops are replayed, so the current value is
-        // the last one recorded — or the captured page, if nothing set it.
-        const previous = [...current]
-          .reverse()
-          .find((op) => op.t === "setAttr" && op.id === id && op.name === "class");
-        const currentClasses =
-          previous && previous.t === "setAttr" && typeof previous.value === "string"
-            ? previous.value.split(/\s+/).filter(Boolean)
-            : block.classes;
-
-        const kept = currentClasses.filter(
+        const kept = classesNow(current, block).filter(
           (c) => c !== "cu-only-desktop" && c !== "cu-only-mobile",
         );
         const next =
@@ -489,7 +500,22 @@ export function Workspace({
         return ops;
       });
     },
-    [VISIBILITY_CSS],
+    [],
+  );
+
+  /**
+   * The same setting across every block of a section.
+   *
+   * Per-block is the wrong unit for the thing people actually want. A card is a
+   * heading, some copy, a picture, two features and a button — six blocks — and
+   * "show this card on desktop only" applied to one of them hides a line out of
+   * the middle of it and leaves the rest on screen looking broken.
+   */
+  const setSectionVisibility = useCallback(
+    (ids: string[], mode: Visibility) => {
+      for (const id of ids) setVisibility(id, mode);
+    },
+    [setVisibility],
   );
 
   const changeMeta = useCallback(
@@ -599,6 +625,14 @@ export function Workspace({
   const selected: DerivedBlock | null = selectedId
     ? derivedById.get(selectedId) ?? null
     : null;
+  /**
+   * Read from the op list rather than from the block, so the control reflects a
+   * change the moment it is made instead of after the next save.
+   */
+  const selectedVisibility: Visibility = useMemo(
+    () => (selected ? visibilityOf(classesNow(ops, selected.block)) : "both"),
+    [ops, selected],
+  );
   const changedCount = derived.filter((d) => d.changed).length + (metaChanged ? 1 : 0);
   /** Something to compare: reworded copy, or structure this version adds. */
   const hasBefore = changedCount > 0 || pending.length > 0;
@@ -817,6 +851,10 @@ export function Workspace({
             onChangeMeta={changeMeta}
             onRevertBlock={revertBlock}
             onSetVisibility={setVisibility}
+            visibility={selectedVisibility}
+            sectionBlockIds={section?.blockIds ?? null}
+            sectionLabel={section?.label ?? null}
+            onSetSectionVisibility={setSectionVisibility}
             readOnly={readOnly}
             aiSlot={
               <AiPanel
