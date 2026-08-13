@@ -41,6 +41,10 @@ export function InspectorPane({
   onChangeMeta,
   onRevertBlock,
   onSetVisibility,
+  visibility,
+  sectionBlockIds,
+  sectionLabel,
+  onSetSectionVisibility,
   readOnly,
   aiSlot,
   commentSlot,
@@ -51,6 +55,18 @@ export function InspectorPane({
   onChangeBlock: (id: string, html: string) => void;
   /** Restrict a block to one device, or put it back on both. */
   onSetVisibility: (id: string, mode: Visibility) => void;
+  /**
+   * Read from the op list by Workspace, not from the block.
+   *
+   * `block.classes` describes the captured page until a save round-trips, so
+   * deriving this here would leave the control reporting "Both" however many
+   * times someone had changed it.
+   */
+  visibility: Visibility;
+  /** Every block of the section the selection sits in, for the whole-card case. */
+  sectionBlockIds: string[] | null;
+  sectionLabel: string | null;
+  onSetSectionVisibility: (ids: string[], mode: Visibility) => void;
   onChangeMeta: (patch: Partial<PageMeta>) => void;
   onRevertBlock: (id: string) => void;
   readOnly: boolean;
@@ -77,6 +93,10 @@ export function InspectorPane({
       onChange={onChangeBlock}
       onRevert={onRevertBlock}
       onSetVisibility={onSetVisibility}
+      visibility={visibility}
+      sectionBlockIds={sectionBlockIds}
+      sectionLabel={sectionLabel}
+      onSetSectionVisibility={onSetSectionVisibility}
       readOnly={readOnly}
       aiSlot={aiSlot}
       commentSlot={commentSlot}
@@ -109,6 +129,10 @@ function BlockEditor({
   onChange,
   onRevert,
   onSetVisibility,
+  visibility,
+  sectionBlockIds,
+  sectionLabel,
+  onSetSectionVisibility,
   readOnly,
   aiSlot,
   commentSlot,
@@ -117,6 +141,10 @@ function BlockEditor({
   onChange: (id: string, html: string) => void;
   onRevert: (id: string) => void;
   onSetVisibility: (id: string, mode: Visibility) => void;
+  visibility: Visibility;
+  sectionBlockIds: string[] | null;
+  sectionLabel: string | null;
+  onSetSectionVisibility: (ids: string[], mode: Visibility) => void;
   readOnly: boolean;
   aiSlot?: React.ReactNode;
   commentSlot?: React.ReactNode;
@@ -131,7 +159,6 @@ function BlockEditor({
   }, [derived.html, showHtml]);
 
   const hasMarkup = /<[a-z][^>]*>/i.test(derived.block.html);
-  const visibility = visibilityOf(derived.block.classes);
   const [imageError, setImageError] = useState<string | null>(null);
 
   /**
@@ -325,11 +352,36 @@ function BlockEditor({
                 </button>
               ))}
             </div>
-            {visibility !== "both" ? (
+            {/* The whole-card case, which is what people actually reach for.
+                A card is six or seven blocks, and restricting one of them takes
+                a line out of the middle and leaves the rest on screen. */}
+            {sectionBlockIds && sectionBlockIds.length > 1 ? (
               <p className="mt-1.5 text-[10px] leading-snug text-[var(--color-ink-faint)]">
-                Hidden below 768px on desktop-only, and at 768px and above on mobile-only. Check it
-                with the Mobile and Desktop toggles above the preview. The rule travels with the
-                version and appears in the export.
+                Applies to this block only.{" "}
+                <button
+                  type="button"
+                  onClick={() => onSetSectionVisibility(sectionBlockIds, visibility)}
+                  className="underline underline-offset-2 hover:text-[var(--color-ink)]"
+                >
+                  Apply to all {sectionBlockIds.length} blocks
+                </button>{" "}
+                in {sectionLabel ? `“${sectionLabel}”` : "this section"} to hide the whole thing.
+              </p>
+            ) : null}
+
+            {/* One sentence about the state it is actually in. Describing both
+                rules at once read as a puzzle, and someone reading the buttons
+                rather than the heading above them picked the opposite of what
+                they wanted. */}
+            {visibility !== "both" ? (
+              <p className="mt-1.5 rounded-md bg-[var(--color-moved-soft)] px-2 py-1.5 text-[11px] leading-snug text-[var(--color-ink-soft)]">
+                <strong>
+                  {visibility === "desktop"
+                    ? "Hidden on mobile. Visible on desktop."
+                    : "Hidden on desktop. Visible on mobile."}
+                </strong>{" "}
+                The switch is at 768px wide. Check it with the Mobile and Desktop toggles above the
+                preview. The rule travels with the version and appears in the export.
               </p>
             ) : null}
           </section>
