@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { Block, Op, PageMeta } from "@/lib/ops/types";
+import { assignNewIds } from "@/lib/ops/ids";
+import { sanitizeHtml } from "@/lib/ops/sanitize";
 import { usePreviewFrame } from "@/lib/preview/use-preview-frame";
 import {
   deriveBlocks,
@@ -394,6 +396,28 @@ export function Workspace({
     });
   }, []);
 
+  /**
+   * Add a template's markup to the page, directly after `afterBlockId`.
+   *
+   * Sanitised and stamped here, at op-creation time, exactly as the AI path
+   * does it in `lib/ai/suggest.ts` — the ids are baked into the op's html so
+   * replaying the list gives the same blocks the same ids every time. Minting
+   * on apply instead would rename them on every reload and detach comments
+   * from the copy they were left against.
+   *
+   * The templates are ours rather than a model's, but they still go through
+   * `sanitizeHtml`: it is also what strips the editor's own attributes, and
+   * routing every insert through one path means a future template cannot
+   * quietly become the exception.
+   */
+  const addSection = useCallback(
+    (afterBlockId: string, html: string) => {
+      const stamped = assignNewIds(document, sanitizeHtml(document, html));
+      mergeOps([{ t: "insert", refId: afterBlockId, pos: "after", html: stamped }]);
+    },
+    [mergeOps],
+  );
+
   const changeMeta = useCallback(
     (patch: Partial<PageMeta>) => {
       setOps((current) => {
@@ -425,6 +449,12 @@ export function Workspace({
       startSaving(async () => {
         try {
           const result = await saveOpsAction(version.id, snapshot);
+          // The save was refused. Leave the ops unsaved and the autosave guard
+          // set, so the same rejected list is not retried every two seconds.
+          if (result.error) {
+            setProblems([result.error]);
+            return;
+          }
           setSavedOps(snapshot);
           lastAutosaveAttempt.current = null;
           if (result.failures.length) {
@@ -437,7 +467,14 @@ export function Workspace({
           // next navigation is fresh.
           if (refresh) router.refresh();
         } catch (error) {
-          setProblems([error instanceof Error ? error.message : String(error)]);
+          // Only unexpected throws reach here, and their message has been
+          // stripped in production — printing it shows React's minified-error
+          // boilerplate rather than anything useful. Say what the reader can
+          // act on instead, and put the real error where an admin can find it.
+          console.error("saveOpsAction failed", error);
+          setProblems([
+            "Saving failed unexpectedly. Your changes are still on screen — try again, and if it keeps happening the details are in the server log.",
+          ]);
         }
       });
     },
@@ -528,7 +565,14 @@ export function Workspace({
             // stopped autosave, and the edit was gone on the next load.
             const snapshot = ops;
             if (dirty) {
-              await saveOpsAction(version.id, snapshot);
+              const result = await saveOpsAction(version.id, snapshot);
+              // A refused save used to throw and abort the approval. Now that
+              // it returns instead, stop here explicitly — approving a version
+              // whose last edits never saved would freeze the wrong wording.
+              if (result.error) {
+                setProblems([result.error]);
+                return;
+              }
               setSavedOps(snapshot);
             }
             await setVersionStatusAction(version.id, status);
@@ -598,6 +642,7 @@ export function Workspace({
             }}
             metaChanged={metaChanged}
             onRevertSection={revertBlocks}
+            onAddSection={addSection}
             onSelectSection={(firstBlockId) => {
               setSelectedId(firstBlockId);
               setPane("inspector");
@@ -1125,3 +1170,4 @@ function Toolbar({
     </div>
   );
 }
+
