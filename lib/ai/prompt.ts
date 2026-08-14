@@ -25,6 +25,15 @@ export interface SuggestContext {
   cssIndex: Record<string, string[]>;
   /** Section markup, layout mode only. */
   sectionHtml?: string | null;
+  /**
+   * This request adds a section rather than rewriting one.
+   *
+   * The block it goes after, and the label of the section it follows. Scope,
+   * neighbours and section markup all still describe the *existing* copy — the
+   * point of showing it is that the new section has to look like it belongs
+   * beside it.
+   */
+  addAfterBlockId?: string | null;
   /** Whether the model may search the web on this request. */
   webSearch?: boolean;
   /** A crop of the page as captured, sent as the first image. */
@@ -184,7 +193,42 @@ export function buildUserPrompt(context: SuggestContext): string {
 
   if (context.sectionHtml) {
     sections.push(
-      `SECTION MARKUP (so you can see the structure you are changing):\n\`\`\`html\n${context.sectionHtml.slice(0, 12_000)}\n\`\`\``,
+      context.addAfterBlockId
+        ? `SECTION MARKUP — the section your new one will sit next to. Copy its ` +
+          `nesting and its class names so what you add looks like part of the ` +
+          `same page:\n\`\`\`html\n${context.sectionHtml.slice(0, 12_000)}\n\`\`\``
+        : `SECTION MARKUP (so you can see the structure you are changing):\n\`\`\`html\n${context.sectionHtml.slice(0, 12_000)}\n\`\`\``,
+    );
+  }
+
+  /*
+   * Adding is a different job from rewriting, and the difference has to be
+   * stated or the model does the job it has always been asked to do.
+   *
+   * Everything else in this prompt describes copy that already exists, and
+   * left to itself a model reads that as an invitation to improve it. The one
+   * op asked for here is an insert; touching the surrounding copy is not a
+   * bonus, it is a change nobody asked for arriving inside one they did.
+   */
+  if (context.addAfterBlockId) {
+    sections.push(
+      `THE TASK: add one new section to this page, immediately after the block ` +
+        `with id "${context.addAfterBlockId}".\n` +
+        `Return exactly one op per option. Every field of the op schema must be ` +
+        `present, with "" where it does not apply — note the key is "t", not ` +
+        `"op":\n` +
+        `{"t":"insert","id":"","html":"<the new section>","title":"",` +
+        `"description":"","refId":"${context.addAfterBlockId}","pos":"after",` +
+        `"name":"","value":"","css":""}\n` +
+        `No setText, no changes of any kind to copy that is already there.\n` +
+        `The html must be a complete section — a real container with real ` +
+        `content inside it, written the way the markup above is written. Use ` +
+        `that section's own class names. Do not invent a design system, and do ` +
+        `not emit a bare tag with no classes on a page that plainly uses them.\n` +
+        `Every line of copy goes in its own element, so each one can be edited, ` +
+        `diffed and commented on afterwards.\n` +
+        `Write real copy for this page and this business. Placeholder wording — ` +
+        `"Section heading", "Lorem ipsum", "Your text here" — is not an answer.`,
     );
   }
 

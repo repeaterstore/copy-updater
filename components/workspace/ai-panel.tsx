@@ -34,6 +34,8 @@ export function AiPanel({
   section,
   describeBlock,
   onApply,
+  addRequest,
+  onClearAddRequest,
   readOnly,
 }: {
   versionId: string;
@@ -47,6 +49,15 @@ export function AiPanel({
   describeBlock: (id: string) => { text: string; role: string } | null;
   /** `replacing` is the option applied before it, which this one supersedes. */
   onApply: (ops: Op[], replacing?: Op[]) => void;
+  /**
+   * Set when the outline's "+" asked for a section, naming what it goes after.
+   *
+   * The panel switches into adding rather than rewriting: the request carries
+   * the anchor, the model is told to return one insert, and the surrounding
+   * markup goes along as the pattern to match.
+   */
+  addRequest: { afterBlockId: string; sectionLabel: string } | null;
+  onClearAddRequest: () => void;
   readOnly: boolean;
 }) {
   const [model, setModel] = useState(config.defaultModel ?? config.models[0] ?? "");
@@ -168,8 +179,17 @@ export function AiPanel({
     );
   }
 
-  const scopeIds =
-    scope === "page"
+  /*
+   * Adding is always scoped to the section it follows.
+   *
+   * The scope is what the model is shown and what an op is allowed to name, and
+   * an insert has to be anchored to something in it. Leaving that to whatever
+   * the scope toggle happened to be set to meant the anchor could be out of
+   * scope and every option rejected on arrival.
+   */
+  const scopeIds = addRequest
+    ? (section?.blockIds?.length ? section.blockIds : [addRequest.afterBlockId])
+    : scope === "page"
       ? visibleBlockIds
       : scope === "section"
         ? (section?.blockIds ?? [])
@@ -228,6 +248,7 @@ export function AiPanel({
             scopeBlockIds: scopeIds,
             scopeKind: metaScope ? "meta" : scope,
             sectionLabel: scope === "section" ? (section?.label ?? null) : null,
+            addAfterBlockId: addRequest?.afterBlockId ?? null,
             webSearch,
             allModels,
             brandVoiceId: voiceId === VOICE_CUSTOM || voiceId === VOICE_NONE ? null : voiceId,
@@ -310,6 +331,12 @@ export function AiPanel({
           ))}
         </select>
 
+        {/* Scope, mode and shape all describe rewriting copy that exists. None
+            of them mean anything for a section that does not yet, and leaving
+            them on screen invited someone to set a scope the request then
+            ignores. */}
+        {addRequest ? null : (
+          <>
         <Segmented
           value={scope}
           onChange={setScope}
@@ -353,6 +380,10 @@ export function AiPanel({
             { value: "layout", label: "Copy + layout" },
           ]}
         />
+          </>
+        )}
+
+        {addRequest ? null : (
         <Segmented
           value={shape}
           onChange={setShape}
@@ -361,6 +392,7 @@ export function AiPanel({
             { value: "directives", label: "Apply my list" },
           ]}
         />
+        )}
 
         {mode === "layout" ? (
           <p className="rounded-md bg-[var(--color-moved-soft)] px-2 py-1.5 text-[11px] text-[var(--color-ink-soft)]">
@@ -480,17 +512,55 @@ export function AiPanel({
           ) : null}
         </div>
 
-        <textarea
-          rows={shape === "directives" ? 5 : 2}
-          className="field resize-y text-xs"
-          placeholder={
-            shape === "directives"
-              ? "Change the H1 to lead with speed.\nSwap “buy now” for “check coverage”.\nAdd a bullet about the 2-year warranty."
-              : "Optional direction — e.g. more urgency, lead with the warranty"
-          }
-          value={instructions}
-          onChange={(e) => setInstructions(e.target.value)}
-        />
+        {/* An add request replaces the panel's usual framing rather than sitting
+            beside it: the scope toggles, the mode and the shape all describe
+            rewriting copy that exists, and none of them apply to writing a
+            section that does not. */}
+        {addRequest ? (
+          <div className="rounded-md border border-[var(--color-accent)] bg-[var(--color-accent-soft)] p-2">
+            <div className="mb-1.5 flex items-baseline justify-between gap-2">
+              <p className="text-[11px] font-semibold">
+                New section after “{addRequest.sectionLabel}”
+              </p>
+              <button
+                type="button"
+                onClick={onClearAddRequest}
+                className="shrink-0 text-[11px] text-[var(--color-ink-soft)] hover:text-[var(--color-ink)]"
+              >
+                Cancel
+              </button>
+            </div>
+            <textarea
+              rows={3}
+              autoFocus
+              className="field resize-y text-xs"
+              placeholder={
+                "What should it say? For example:\n" +
+                "An FAQ answering the three questions we get most.\n" +
+                "Something like the testimonials block further up."
+              }
+              value={instructions}
+              onChange={(e) => setInstructions(e.target.value)}
+            />
+            <p className="mt-1 text-[10px] leading-snug text-[var(--color-ink-faint)]">
+              The markup around it goes with the request, so what comes back uses
+              this page&rsquo;s own classes. Apply an option to see it in place —
+              trying another replaces it.
+            </p>
+          </div>
+        ) : (
+          <textarea
+            rows={shape === "directives" ? 5 : 2}
+            className="field resize-y text-xs"
+            placeholder={
+              shape === "directives"
+                ? "Change the H1 to lead with speed.\nSwap “buy now” for “check coverage”.\nAdd a bullet about the 2-year warranty."
+                : "Optional direction — e.g. more urgency, lead with the warranty"
+            }
+            value={instructions}
+            onChange={(e) => setInstructions(e.target.value)}
+          />
+        )}
 
         <Toggle
           checked={allModels}

@@ -146,6 +146,22 @@ export function Workspace({
    * nothing on the real site.
    */
   const [recipeId, setRecipeId] = useState<string | null>(null);
+  /**
+   * A pending "add a section here", from the outline's "+".
+   *
+   * Held here rather than in the panel because the click happens in the
+   * outline: asking for a section also selects the block it goes after, which
+   * is what puts the surrounding markup in scope for the request.
+   */
+  const [addRequest, setAddRequest] = useState<
+    { afterBlockId: string; sectionLabel: string } | null
+  >(null);
+
+  const askForSection = useCallback((afterBlockId: string, sectionLabel: string) => {
+    setSelectedId(afterBlockId);
+    setAddRequest({ afterBlockId, sectionLabel });
+    setPane("inspector");
+  }, []);
   const [isSaving, startSaving] = useTransition();
 
   const readOnly = version.status === "approved";
@@ -1010,6 +1026,7 @@ export function Workspace({
             metaChanged={metaChanged}
             onRevertSection={revertBlocks}
             onAddSection={addSection}
+            onAskForSection={askForSection}
             onDuplicate={duplicate}
             onMove={moveBlock}
             onRemove={removeBlock}
@@ -1151,6 +1168,8 @@ export function Workspace({
                 section={section}
                 describeBlock={describeBlock}
                 onApply={mergeOps}
+                addRequest={addRequest}
+                onClearAddRequest={() => setAddRequest(null)}
                 readOnly={readOnly}
               />
             }

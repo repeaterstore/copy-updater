@@ -47,6 +47,8 @@ export interface SuggestRequest {
   sectionLabel?: string | null;
   webSearch: boolean;
   allModels: boolean;
+  /** Adding a section after this block, rather than rewriting what is in scope. */
+  addAfterBlockId?: string | null;
   brandVoiceId?: string | null;
   customBrandVoice?: string | null;
   /**
@@ -199,13 +201,18 @@ export async function POST(request: Request) {
    * a suggestion without the markup is the behaviour that existed before it.
    */
   let sectionHtml: string | null = null;
-  if (input.mode === "layout" && input.scopeBlockIds.length > 0) {
+  // Always fetched for an add: the surrounding markup is not context there, it
+  // is the pattern the new section has to match.
+  if ((input.mode === "layout" || input.addAfterBlockId) && input.scopeBlockIds.length > 0) {
     sectionHtml = await loadSkeleton(snapshot)
       .then((skeleton) => sectionMarkupFor(skeleton, version.ops ?? [], input.scopeBlockIds))
       .catch(() => null);
   }
 
-  const reasoningLevel = reasoningFor(settings.reasoningLevel, input.mode, input.shape);
+  // Adding a section is structural whatever the panel's mode says, and copy
+  // mode's schema has no insert op to return.
+  const mode: AiMode = input.addAfterBlockId ? "layout" : input.mode;
+  const reasoningLevel = reasoningFor(settings.reasoningLevel, mode, input.shape);
   const brandVoice = await resolveBrandVoice({
     brandVoiceId: input.brandVoiceId ?? null,
     customBrandVoice: input.customBrandVoice ?? null,
@@ -249,7 +256,7 @@ export async function POST(request: Request) {
           fallbackModels: settings.fallbackModels,
           reasoningLevel,
           webSearch: input.webSearch,
-          mode: input.mode,
+          mode,
           shape: input.shape,
           instructions: input.instructions,
           optionCount: Math.min(Math.max(input.optionCount, 1), 5),
@@ -264,6 +271,7 @@ export async function POST(request: Request) {
           meta,
           cssIndex: snapshot.cssIndex,
           sectionHtml,
+          addAfterBlockId: input.addAfterBlockId ?? null,
           screenshot,
           referenceImage,
           abortSignal: signal,
@@ -286,7 +294,7 @@ export async function POST(request: Request) {
           .values({
             versionId: input.versionId,
             model: modelId,
-            mode: input.mode,
+            mode,
             shape: input.shape,
             reasoningLevel,
             webSearch: input.webSearch,
@@ -317,7 +325,7 @@ export async function POST(request: Request) {
           await db.insert(schema.aiRuns).values({
             versionId: input.versionId,
             model: input.model,
-            mode: input.mode,
+            mode,
             shape: input.shape,
             reasoningLevel,
             webSearch: input.webSearch,

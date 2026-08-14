@@ -104,10 +104,13 @@ export const SECTION_TEMPLATES: SectionTemplate[] = [
 function AddSectionButton({
   sectionLabel,
   onAdd,
+  onAskAi,
 }: {
   sectionLabel: string;
   /** Called with the chosen template's markup, before ids or sanitising. */
   onAdd: (html: string) => void;
+  /** Opens the AI panel to write one instead, using this page as the pattern. */
+  onAskAi: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const wrapper = useRef<HTMLDivElement | null>(null);
@@ -149,6 +152,31 @@ function AddSectionButton({
         >
           <p className="px-2 py-1 text-[10px] uppercase tracking-wide text-[var(--color-ink-faint)]">
             Add after &ldquo;{sectionLabel}&rdquo;
+          </p>
+
+          {/* First, because it is the one that produces something belonging to
+              this page. The templates below are plain semantic tags with no
+              classes — useful as a placeholder for a developer, and visibly not
+              part of the design. */}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              onAskAi();
+              setOpen(false);
+            }}
+            className="block w-full rounded px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-sunken)]"
+          >
+            <span className="block text-xs font-medium text-[var(--color-accent)]">
+              Ask the AI…
+            </span>
+            <span className="block text-[10px] text-[var(--color-ink-faint)]">
+              Describe it; the markup around it goes along, so it matches the page
+            </span>
+          </button>
+
+          <p className="mt-1 border-t border-[var(--color-line)] px-2 pt-1.5 pb-0.5 text-[10px] uppercase tracking-wide text-[var(--color-ink-faint)]">
+            Or a plain template
           </p>
           {SECTION_TEMPLATES.map((template) => (
             <button
@@ -313,6 +341,7 @@ export function OutlinePane({
   onSelectSection,
   onRevertSection,
   onAddSection,
+  onAskForSection,
   onDuplicate,
   onMove,
   onRemove,
@@ -344,6 +373,8 @@ export function OutlinePane({
   readOnly: boolean;
   /** Insert a template's markup directly after the block ending a section. */
   onAddSection: (afterBlockId: string, html: string) => void;
+  /** Ask the AI for a section here, rather than dropping in a fixed template. */
+  onAskForSection: (afterBlockId: string, sectionLabel: string) => void;
   structuralCount: number;
   /** Unresolved comments per block id. */
   commentCounts: Record<string, number>;
@@ -564,6 +595,19 @@ export function OutlinePane({
     // grouped, which is what kept the menu recognisable as furniture.
     const shownHere = all.filter(matches);
     if (shownHere.length === 0) return null;
+
+    /*
+     * What a new section is anchored after: the last of this section's copy.
+     *
+     * The whole subtree, so a section with subsections ends after the last of
+     * them rather than in the middle. Images and deleted blocks are skipped —
+     * they are excluded from what an AI request may name, so anchoring an
+     * insert to one would have every option rejected on arrival for pointing
+     * outside its own scope.
+     */
+    const anchor = [...all]
+      .reverse()
+      .find((d) => !d.removed && d.block.role !== "image")?.block.id ?? null;
     const rows = section.blocks.filter(matches);
 
     return (
@@ -608,10 +652,11 @@ export function OutlinePane({
                   section's own copy: a section with subsections ends after the
                   last of them, and inserting before that would drop the new
                   copy into the middle of the section it was meant to follow. */}
-              {all.length > 0 ? (
+              {anchor ? (
                 <AddSectionButton
                   sectionLabel={section.label}
-                  onAdd={(html) => onAddSection(all[all.length - 1].block.id, html)}
+                  onAdd={(html) => onAddSection(anchor, html)}
+                  onAskAi={() => onAskForSection(anchor, section.label)}
                 />
               ) : null}
               {/* Only where there is something to undo. Reverting a section a

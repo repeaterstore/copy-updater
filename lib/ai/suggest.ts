@@ -69,6 +69,8 @@ export interface SuggestInput {
   cssIndex: Record<string, string[]>;
   /** Real markup of the section in scope, so layout work can copy its shape. */
   sectionHtml?: string | null;
+  /** Set when the request adds a section after this block rather than rewriting. */
+  addAfterBlockId?: string | null;
   screenshot?: Buffer | null;
   /**
    * A picture of the section someone wants, pasted in for this request only.
@@ -168,12 +170,18 @@ function flatOpSchema(mode: AiMode) {
     description: z.string().describe("New meta description, for setMeta." + empty),
   };
 
+  // Named in the description because `t` is not a guessable name for it. Asked
+  // for a section, a model returned a perfectly formed object whose ops each
+  // said `"op": "insert"` — the right answer under the wrong key, thrown away
+  // by schema validation and reported as though it had rambled.
+  const kind = 'Which operation this is. The field is literally named "t".';
+
   if (mode === "copy") {
-    return z.object({ t: z.enum(COPY_OP_TYPES), ...common });
+    return z.object({ t: z.enum(COPY_OP_TYPES).describe(kind), ...common });
   }
 
   return z.object({
-    t: z.enum(LAYOUT_OP_TYPES),
+    t: z.enum(LAYOUT_OP_TYPES).describe(kind),
     ...common,
     refId: z.string().describe("Reference block, for insert and move." + empty),
     pos: z
@@ -311,6 +319,7 @@ export async function generateSuggestions(
       context,
       cssIndex: input.cssIndex,
       sectionHtml: input.sectionHtml,
+      addAfterBlockId: input.addAfterBlockId,
       webSearch: input.webSearch,
       scopeKind: input.scopeKind,
       sectionLabel: input.sectionLabel,

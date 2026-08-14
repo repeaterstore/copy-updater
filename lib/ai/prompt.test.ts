@@ -214,3 +214,64 @@ test("layout mode asks for structure, copy mode forbids it", () => {
   assert.match(copy, /Do not add, remove, move or restyle anything/);
   assert.doesNotMatch(copy, /Structure is part of the answer here/);
 });
+
+test("an add request asks for one insert and forbids touching what is there", () => {
+  const prompt = buildUserPrompt({
+    pageUrl: "https://www.waveform.com/",
+    pageName: "Waveform home",
+    brief: null,
+    mode: "layout",
+    shape: "optimize",
+    instructions: "An FAQ answering the three questions we get most.",
+    optionCount: 3,
+    meta: META,
+    scope: [],
+    context: [],
+    cssIndex: {},
+    webSearch: false,
+    scopeKind: "section",
+    sectionLabel: "Why us",
+    sectionHtml: '<section class="faq wrapper"><h2 class="q">Questions</h2></section>',
+    addAfterBlockId: "body/main:1/section:2/p:3",
+  });
+
+  // The anchor has to be named, or the model has to guess where it goes.
+  assert.match(prompt, /body\/main:1\/section:2\/p:3/);
+  assert.match(prompt, /exactly one op per option/i);
+  // The discriminator is named, because `t` is not a guessable key: a model
+  // returned a well-formed object using `"op"` and had it discarded.
+  assert.match(prompt, /"t":"insert"/);
+  assert.match(prompt, /not "op"/);
+  // The example has to carry every field the schema demands, or a model
+  // follows the example and has its answer rejected for the missing ones.
+  assert.match(prompt, /"name":"","value":"","css":""/);
+  assert.match(prompt, /No setText/i);
+  // The surrounding markup is reframed as the pattern to match, not as the
+  // thing being edited.
+  assert.match(prompt, /sit next to/i);
+  assert.match(prompt, /faq wrapper/);
+  // Placeholder copy is the failure mode of every fixed template on this page.
+  assert.match(prompt, /Lorem ipsum/);
+});
+
+test("an ordinary rewrite is not told to add anything", () => {
+  const prompt = buildUserPrompt({
+    pageUrl: "https://www.waveform.com/",
+    pageName: "Waveform home",
+    brief: null,
+    mode: "layout",
+    shape: "optimize",
+    instructions: null,
+    optionCount: 3,
+    meta: META,
+    scope: [],
+    context: [],
+    cssIndex: {},
+    webSearch: false,
+    scopeKind: "section",
+    sectionLabel: "Why us",
+    sectionHtml: "<section><h2>Questions</h2></section>",
+  });
+  assert.ok(!/exactly one op per option/i.test(prompt));
+  assert.match(prompt, /structure you are changing/i);
+});
