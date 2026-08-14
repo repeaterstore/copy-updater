@@ -14,7 +14,9 @@ import { cropToBlocks, prepareReferenceImage } from "@/lib/ai/crop";
 import { loadSettings } from "@/lib/ai/openrouter";
 import { describeAiError, generateSuggestions, type SuggestOption } from "@/lib/ai/suggest";
 import { resolveBrandVoice } from "@/lib/ai/voices";
+import { sectionMarkupFor } from "@/lib/ops/resolve.server";
 import { requireUser } from "@/lib/session";
+import { loadSkeleton } from "@/lib/versions";
 import { readDataFile } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
@@ -174,6 +176,21 @@ export async function POST(request: Request) {
 
   const referenceImage = await decodeReferenceImage(input.referenceImage);
 
+  /*
+   * The markup of the section in question, for layout work.
+   *
+   * Only for layout mode, and only when something is in scope: a copy rewrite
+   * does not need it, and sending it anyway would be several thousand tokens of
+   * markup on every request to reword a headline. Failures are non-fatal —
+   * a suggestion without the markup is the behaviour that existed before it.
+   */
+  let sectionHtml: string | null = null;
+  if (input.mode === "layout" && input.scopeBlockIds.length > 0) {
+    sectionHtml = await loadSkeleton(snapshot)
+      .then((skeleton) => sectionMarkupFor(skeleton, version.ops ?? [], input.scopeBlockIds))
+      .catch(() => null);
+  }
+
   const reasoningLevel = reasoningFor(settings.reasoningLevel, input.mode, input.shape);
   const brandVoice = await resolveBrandVoice({
     brandVoiceId: input.brandVoiceId ?? null,
@@ -227,6 +244,7 @@ export async function POST(request: Request) {
           sectionLabel: input.sectionLabel,
           meta,
           cssIndex: snapshot.cssIndex,
+          sectionHtml,
           screenshot,
           referenceImage,
           abortSignal: request.signal,

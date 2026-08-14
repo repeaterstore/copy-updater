@@ -37,8 +37,22 @@ const ROLE_BY_TAG: Record<string, BlockRole> = {
   LABEL: "label",
 };
 
+/**
+ * Is this element a picture, or a wrapper whose only content is one?
+ *
+ * `<img>` is void, so asking it for a descendant image finds nothing — the tag
+ * has to be tested as well as the subtree, and forgetting that is why this is
+ * one function rather than the same condition written out three times.
+ */
+export function isPicture(el: Element): boolean {
+  const tag = el.tagName.toUpperCase();
+  return tag === "IMG" || tag === "PICTURE" || el.querySelector("img, picture") !== null;
+}
+
 function roleFor(el: Element): BlockRole {
   const tag = el.tagName.toUpperCase();
+  // Whatever tag it uses, something with a picture and no words is a picture.
+  if ((el.textContent ?? "").trim() === "" && isPicture(el)) return "image";
   if (ROLE_BY_TAG[tag]) return ROLE_BY_TAG[tag];
   // Anchors and buttons styled as CTAs are common; catch role="button" too.
   const role = el.getAttribute("role");
@@ -68,6 +82,10 @@ export function isBlockCandidate(el: Element): boolean {
   const tag = el.tagName.toUpperCase();
   if (SKIP_TAGS.has(tag)) return false;
   const empty = !el.textContent || el.textContent.trim() === "";
+  // A picture is a block in its own right so it can be selected and commented
+  // on. Hidden from the outline by default — see the Images filter — because a
+  // page carries far more images than it does copy.
+  if (empty && (tag === "IMG" || tag === "PICTURE")) return true;
   /*
    * An empty text container holding a picture is still a block.
    *
@@ -76,7 +94,7 @@ export function isBlockCandidate(el: Element): boolean {
    * dropped out of the outline, and the picture became something present on the
    * page that nothing in the tool could select, edit or undo.
    */
-  if (empty && !(TEXT_CONTAINERS.has(tag) && el.querySelector("img, picture"))) return false;
+  if (empty && !(TEXT_CONTAINERS.has(tag) && isPicture(el))) return false;
   for (const desc of Array.from(el.getElementsByTagName("*"))) {
     if (!INLINE_TAGS.has(desc.tagName.toUpperCase())) return false;
   }
@@ -189,9 +207,9 @@ export function extractBlocks(
 
     if (isBlockCandidate(el)) {
       const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
-      // isBlockCandidate has already decided an empty one is a picture in a
-      // text container; this second test only has to agree with it.
-      if (text !== "" || el.querySelector("img, picture")) {
+      // isBlockCandidate has already decided an empty one is a picture; this
+      // second test only has to agree with it.
+      if (text !== "" || isPicture(el)) {
         const role = roleFor(el);
         // A heading names its own section. Assigning before the push (rather
         // than after) stops each heading being filed under the previous one,
@@ -207,6 +225,9 @@ export function extractBlocks(
           id: el.getAttribute(ID_ATTR) ?? structuralPath(el),
           tag: el.tagName.toLowerCase(),
           role,
+          ...(role === "image"
+            ? { alt: (el.tagName.toUpperCase() === "IMG" ? el : el.querySelector("img"))?.getAttribute("alt") ?? "" }
+            : {}),
           html: el.innerHTML,
           text,
           order: order++,

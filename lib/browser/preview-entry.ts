@@ -9,6 +9,7 @@ import { cssEscape, isBlockCandidate } from "../ops/extract";
 import { sanitizeHtml } from "../ops/sanitize";
 import { applyWithUndo, runUndo, type UndoEntry } from "../ops/undo";
 import { ID_ATTR } from "../ops/types";
+import { cleanMarkup, enclosingSection } from "../ops/section-scope";
 import {
   PREVIEW_CHANNEL,
   type DiffHighlights,
@@ -19,6 +20,9 @@ import {
 const DIFF_ATTR = "data-cu-diff";
 const COMMENT_ATTR = "data-cu-comment";
 const SELECTED_ATTR = "data-cu-selected";
+
+/** Ceiling on markup handed back for duplication. See the readMarkup case. */
+const MAX_MARKUP_BYTES = 500_000;
 
 const DIFF_STYLES = `
 [${DIFF_ATTR}] { position: relative; }
@@ -503,8 +507,39 @@ function handle(message: HostMessage): void {
       post({ channel: PREVIEW_CHANNEL, type: "measured", boxes });
       break;
     }
+    case "readMarkup": {
+      /*
+       * Always answers, whatever happens.
+       *
+       * The caller is a promise waiting on this reply, so a throw in here — an
+       * id that is not a valid selector, say — does not surface as an error but
+       * as a button that does nothing for two seconds and then gives up.
+       */
+      let html: string | null = null;
+      let anchorId: string | null = null;
+      try {
+        const el = byId(message.id);
+        const target = el && message.enclosing ? enclosingSection(el) : el;
+        if (target) {
+          const markup = cleanMarkup(target);
+          // A snapshot is a page with every asset inlined, so the body runs to
+          // tens of megabytes. Copying something that large is a mistake in
+          // itself, and posting it across the frame boundary would freeze the
+          // tab; the caller reports that it could not be read.
+          if (markup.length <= MAX_MARKUP_BYTES) {
+            html = markup;
+            anchorId = target.getAttribute(ID_ATTR);
+          }
+        }
+      } catch {
+        // Reported as "could not be read", which is what it is.
+      }
+      post({ channel: PREVIEW_CHANNEL, type: "markup", requestId: message.requestId, html, anchorId });
+      break;
+    }
   }
 }
+
 
 function start(): void {
   if (!document.body) return;

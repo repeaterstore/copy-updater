@@ -455,6 +455,73 @@ export function Workspace({
   );
 
   /**
+   * Copy something already on the page, wording and all.
+   *
+   * The best possible markup for "another FAQ question" is the FAQ question
+   * above it: the classes are right because they are the page's own, the
+   * nesting is right because it is the page's own, and it costs no model call
+   * and no guessing. A template cannot match a site it has never seen, and the
+   * AI has to be told what the page looks like before it can even try.
+   *
+   * The content comes with it rather than being blanked. A copy of the real
+   * thing is a working starting point that can be edited down; an empty shell
+   * is a puzzle about what used to be in each slot.
+   *
+   * The markup is read back out of the preview frame because that is the only
+   * place a DOM exists — the workspace holds a flat list of text blocks, which
+   * is enough to duplicate one block but says nothing about the wrappers a
+   * section is built from.
+   */
+  const [duplicating, setDuplicating] = useState<string | null>(null);
+
+  /**
+   * Move a block past its neighbour in the outline.
+   *
+   * Expressed against the block it swaps with, not against an index: an index
+   * means nothing once the list has been rebuilt, and the op has to survive
+   * being replayed against a fresh snapshot months later. Both blocks are
+   * named, so the op says what it means — "put this after that".
+   *
+   * Only within the section, because moving a block out of one and into
+   * another is not a reorder; that is a structural change, and layout mode is
+   * where those belong.
+   */
+  const moveBlock = useCallback(
+    (id: string, swapWith: string, pos: "before" | "after") => {
+      if (id === swapWith) return;
+      mergeOps([{ t: "move", id, refId: swapWith, pos }]);
+    },
+    [mergeOps],
+  );
+
+  const duplicate = useCallback(
+    async (id: string, scope: "block" | "section") => {
+      setDuplicating(id);
+      try {
+        const source = await frame.readMarkup(id, scope === "section");
+        if (!source) {
+          setProblems([
+            scope === "section"
+              ? "That section could not be read from the page. Try again once the preview has finished loading."
+              : "That block could not be read from the page.",
+          ]);
+          return;
+        }
+        // Fresh ids for every element, so the copy is a new thing on the page
+        // rather than a second element answering to the original's id.
+        // Anchored to the element the markup came from, not to the block that
+        // was clicked: a section's copy has to land as its sibling, and
+        // inserting after a block inside it would nest the copy in the original.
+        const stamped = assignNewIds(document, sanitizeHtml(document, source.html));
+        mergeOps([{ t: "insert", refId: source.anchorId, pos: "after", html: stamped }]);
+      } finally {
+        setDuplicating(null);
+      }
+    },
+    [frame, mergeOps],
+  );
+
+  /**
    * Show a block on one device only.
    *
    * Two marker classes plus one stylesheet, rather than an inline style: only a
@@ -637,6 +704,35 @@ export function Workspace({
     () => (selected ? visibilityOf(classesNow(ops, selected.block)) : "both"),
     [ops, selected],
   );
+  /**
+   * The selected image's alt text, ops first and captured markup second.
+   *
+   * Read the same way `selectedVisibility` is, and for the same reason: setAttr
+   * is resolved on the server, so the block still describes the captured page
+   * until a save round-trips, and a field that forgets what was just typed into
+   * it reads as broken.
+   */
+  const selectedAlt = useMemo(() => {
+    if (!selected) return "";
+    const last = [...ops]
+      .reverse()
+      .find((op) => op.t === "setAttr" && op.id === selected.block.id && op.name === "alt");
+    if (last && last.t === "setAttr" && typeof last.value === "string") return last.value;
+    return selected.block.alt ?? "";
+  }, [ops, selected]);
+
+  const setAlt = useCallback(
+    (id: string, value: string) => {
+      setOps((current) => {
+        const without = current.filter(
+          (op) => !(op.t === "setAttr" && op.id === id && op.name === "alt"),
+        );
+        return [...without, { t: "setAttr", id, name: "alt", value }];
+      });
+    },
+    [],
+  );
+
   const changedCount = derived.filter((d) => d.changed).length + (metaChanged ? 1 : 0);
   /** Something to compare: reworded copy, or structure this version adds. */
   const hasBefore = changedCount > 0 || pending.length > 0;
@@ -755,6 +851,10 @@ export function Workspace({
             metaChanged={metaChanged}
             onRevertSection={revertBlocks}
             onAddSection={addSection}
+            onDuplicate={duplicate}
+            onMove={moveBlock}
+            duplicatingId={duplicating}
+            readOnly={readOnly}
             onSelectSection={(firstBlockId) => {
               setSelectedId(firstBlockId);
               setPane("inspector");
@@ -873,6 +973,8 @@ export function Workspace({
             onRevertBlock={revertBlock}
             onSetVisibility={setVisibility}
             visibility={selectedVisibility}
+            altText={selectedAlt}
+            onSetAlt={setAlt}
             sectionBlockIds={section?.blockIds ?? null}
             sectionLabel={section?.label ?? null}
             onSetSectionVisibility={setSectionVisibility}

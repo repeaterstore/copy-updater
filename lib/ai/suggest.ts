@@ -66,6 +66,8 @@ export interface SuggestInput {
   sectionLabel?: string | null;
   meta: Parameters<typeof buildUserPrompt>[0]["meta"];
   cssIndex: Record<string, string[]>;
+  /** Real markup of the section in scope, so layout work can copy its shape. */
+  sectionHtml?: string | null;
   screenshot?: Buffer | null;
   /**
    * A picture of the section someone wants, pasted in for this request only.
@@ -307,6 +309,7 @@ export async function generateSuggestions(
       scope,
       context,
       cssIndex: input.cssIndex,
+      sectionHtml: input.sectionHtml,
       webSearch: input.webSearch,
       scopeKind: input.scopeKind,
       sectionLabel: input.sectionLabel,

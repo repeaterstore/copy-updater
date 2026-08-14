@@ -177,6 +177,66 @@ function AddSectionButton({
   );
 }
 
+/**
+ * Per-row duplicate and reorder.
+ *
+ * Hidden until the row is hovered or focused. The outline is read far more
+ * often than it is rearranged, and three controls on every one of a thousand
+ * rows turns a list of copy into a list of buttons.
+ */
+function RowTools({
+  label,
+  busy,
+  onDuplicate,
+  onUp,
+  onDown,
+}: {
+  label: string;
+  busy: boolean;
+  onDuplicate: () => void;
+  /** Undefined at the ends of the section, where there is nothing to swap with. */
+  onUp?: () => void;
+  onDown?: () => void;
+}) {
+  const short = label.length > 30 ? `${label.slice(0, 30)}…` : label;
+  const cls =
+    "rounded px-1 text-[10px] leading-5 text-[var(--color-ink-faint)] transition-colors hover:text-[var(--color-ink)] disabled:opacity-30";
+  return (
+    <div className="flex shrink-0 items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+      <button
+        type="button"
+        onClick={onUp}
+        disabled={!onUp}
+        title={`Move "${short}" up`}
+        aria-label={`Move "${short}" up`}
+        className={cls}
+      >
+        ↑
+      </button>
+      <button
+        type="button"
+        onClick={onDown}
+        disabled={!onDown}
+        title={`Move "${short}" down`}
+        aria-label={`Move "${short}" down`}
+        className={cls}
+      >
+        ↓
+      </button>
+      <button
+        type="button"
+        onClick={onDuplicate}
+        disabled={busy}
+        title={`Duplicate "${short}", wording and all`}
+        aria-label={`Duplicate "${short}"`}
+        className={`${cls} hover:text-[var(--color-added)]`}
+      >
+        {busy ? "…" : "⧉"}
+      </button>
+    </div>
+  );
+}
+
 const ROLE_LABEL: Record<string, string> = {
   heading: "H",
   paragraph: "P",
@@ -197,6 +257,10 @@ export function OutlinePane({
   onSelectSection,
   onRevertSection,
   onAddSection,
+  onDuplicate,
+  onMove,
+  duplicatingId,
+  readOnly,
   structuralCount,
   commentCounts,
 }: {
@@ -209,6 +273,13 @@ export function OutlinePane({
   onSelectSection: (firstBlockId: string) => void;
   /** Drop every op touching these blocks, putting the section back as captured. */
   onRevertSection: (blockIds: string[]) => void;
+  /** Copy a block, or a whole section, off the page as it currently stands. */
+  onDuplicate: (blockId: string, scope: "block" | "section") => void;
+  /** Reorder by naming the block to swap with, never an index. */
+  onMove: (id: string, swapWith: string, pos: "before" | "after") => void;
+  /** The duplicate in flight, if any — it waits on the preview frame. */
+  duplicatingId: string | null;
+  readOnly: boolean;
   /** Insert a template's markup directly after the block ending a section. */
   onAddSection: (afterBlockId: string, html: string) => void;
   structuralCount: number;
@@ -218,6 +289,13 @@ export function OutlinePane({
   const [changedOnly, setChangedOnly] = useState(false);
   const [commentedOnly, setCommentedOnly] = useState(false);
   const [showHidden, setShowHidden] = useState(false);
+  /**
+   * Off by default. A page carries far more pictures than copy — a hundred on
+   * a long guide against a few dozen paragraphs — so listing them all turns the
+   * outline into a contact sheet. On when someone wants to say which picture is
+   * wrong.
+   */
+  const [showImages, setShowImages] = useState(false);
   const [query, setQuery] = useState("");
 
   /**
@@ -238,13 +316,15 @@ export function OutlinePane({
     return (d: DerivedBlock) => {
       if (changedOnly && !d.changed) return false;
       if (commentedOnly && !commentCounts[d.block.id]) return false;
+      // A commented image stays listed for the same reason a hidden block does.
+      if (d.block.role === "image" && !showImages && !commentCounts[d.block.id]) return false;
       // A commented block stays listed even when hidden: the comment is the
       // only way anyone will find it again.
       if (!showHidden && !isVisible(d.block) && !commentCounts[d.block.id]) return false;
       if (needle && !d.text.toLowerCase().includes(needle)) return false;
       return true;
     };
-  }, [changedOnly, commentedOnly, commentCounts, showHidden, query]);
+  }, [changedOnly, commentedOnly, commentCounts, showHidden, showImages, query]);
 
   /**
    * Sections start collapsed so the outline is a scannable list of headings
@@ -294,6 +374,7 @@ export function OutlinePane({
     selectedRowRef.current?.scrollIntoView({ block: "nearest" });
   }, [selectedId, sections]);
   const hiddenCount = blocks.filter((d) => !isVisible(d.block)).length;
+  const imageCount = blocks.filter((d) => d.block.role === "image").length;
   const changedCount = blocks.filter((d) => d.changed).length;
   const totalComments = Object.values(commentCounts).reduce((a, b) => a + b, 0);
 
@@ -330,6 +411,20 @@ export function OutlinePane({
               }`}
             >
               💬 {totalComments}
+            </button>
+          ) : null}
+          {imageCount > 0 ? (
+            <button
+              type="button"
+              onClick={() => setShowImages((v) => !v)}
+              title="List the page's pictures, so one can be selected and commented on"
+              className={`chip border ${
+                showImages
+                  ? "border-transparent bg-[var(--color-accent)] text-white"
+                  : "border-[var(--color-line-strong)] text-[var(--color-ink-soft)]"
+              }`}
+            >
+              Images {imageCount}
             </button>
           ) : null}
           {hiddenCount > 0 ? (
@@ -457,6 +552,19 @@ export function OutlinePane({
               {/* Only where there is something to undo. Reverting a section a
                   block at a time meant a trip through the inspector for each
                   one, with no way at all to undo an inserted element. */}
+              {/* Duplicating the section copies the real thing off the page —
+                  wrappers, classes and all — which no template can do. */}
+              {readOnly ? null : (
+                <button
+                  type="button"
+                  onClick={() => onDuplicate(section.blocks[0].block.id, "section")}
+                  disabled={duplicatingId === section.blocks[0].block.id}
+                  title={`Duplicate "${section.label}" and everything in it`}
+                  className="shrink-0 rounded px-1 py-1 text-[10px] text-[var(--color-ink-faint)] transition-colors hover:text-[var(--color-added)] disabled:opacity-50"
+                >
+                  {duplicatingId === section.blocks[0].block.id ? "…" : "⧉"}
+                </button>
+              )}
               {undoableHere > 0 ? (
                 <button
                   type="button"
@@ -468,40 +576,71 @@ export function OutlinePane({
                 </button>
               ) : null}
             </div>
-            {open ? rows.map((derived) => (
-              <button
+            {open ? rows.map((derived, rowIndex) => (
+              /* A row is a row of controls, not one button: duplicate and
+                 reorder cannot be nested inside the button that selects it.
+                 They stay hidden until the row is hovered or holds the
+                 selection, so the list still reads as a list of copy. */
+              <div
                 key={derived.block.id}
-                type="button"
-                ref={selectedId === derived.block.id ? selectedRowRef : undefined}
-                onClick={() => onSelect(derived.block.id)}
-                className={`flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-[var(--color-sunken)] ${
+                className={`group flex w-full items-start gap-1 rounded-md pr-1 transition-colors hover:bg-[var(--color-sunken)] ${
                   selectedId === derived.block.id ? "bg-[var(--color-accent-soft)]" : ""
                 }`}
               >
-                <span className="mt-px w-4 shrink-0 font-mono text-[10px] text-[var(--color-ink-faint)]">
-                  {ROLE_LABEL[derived.block.role] ?? "·"}
-                </span>
-                <span className="min-w-0 flex-1 truncate text-xs">{derived.text}</span>
-                {derived.layoutRisk ? (
-                  <span
-                    title="Grew enough to be worth checking on mobile"
-                    className="mt-0.5 shrink-0 text-[10px] text-[var(--color-changed)]"
-                  >
-                    ↕
+                <button
+                  type="button"
+                  ref={selectedId === derived.block.id ? selectedRowRef : undefined}
+                  onClick={() => onSelect(derived.block.id)}
+                  className="flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-1.5 text-left"
+                >
+                  <span className="mt-px w-4 shrink-0 font-mono text-[10px] text-[var(--color-ink-faint)]">
+                    {ROLE_LABEL[derived.block.role] ?? "·"}
                   </span>
-                ) : null}
-                {commentCounts[derived.block.id] ? (
-                  <span
-                    title={`${commentCounts[derived.block.id]} unresolved comment${commentCounts[derived.block.id] === 1 ? "" : "s"}`}
-                    className="shrink-0 text-[10px] leading-4 text-[var(--color-comment)]"
-                  >
-                    💬{commentCounts[derived.block.id] > 1 ? commentCounts[derived.block.id] : ""}
+                  <span className="min-w-0 flex-1 truncate text-xs">
+                    {derived.text || (
+                      <span className="italic text-[var(--color-ink-faint)]">
+                        {derived.block.role === "image" ? "Image" : "—"}
+                      </span>
+                    )}
                   </span>
-                ) : null}
-                {derived.changed ? (
-                  <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-changed)]" />
-                ) : null}
-              </button>
+                  {derived.layoutRisk ? (
+                    <span
+                      title="Grew enough to be worth checking on mobile"
+                      className="mt-0.5 shrink-0 text-[10px] text-[var(--color-changed)]"
+                    >
+                      ↕
+                    </span>
+                  ) : null}
+                  {commentCounts[derived.block.id] ? (
+                    <span
+                      title={`${commentCounts[derived.block.id]} unresolved comment${commentCounts[derived.block.id] === 1 ? "" : "s"}`}
+                      className="shrink-0 text-[10px] leading-4 text-[var(--color-comment)]"
+                    >
+                      💬{commentCounts[derived.block.id] > 1 ? commentCounts[derived.block.id] : ""}
+                    </span>
+                  ) : null}
+                  {derived.changed ? (
+                    <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-changed)]" />
+                  ) : null}
+                </button>
+                {readOnly ? null : (
+                  <RowTools
+                    label={derived.text || "this block"}
+                    busy={duplicatingId === derived.block.id}
+                    onDuplicate={() => onDuplicate(derived.block.id, "block")}
+                    onUp={
+                      rowIndex > 0
+                        ? () => onMove(derived.block.id, rows[rowIndex - 1].block.id, "before")
+                        : undefined
+                    }
+                    onDown={
+                      rowIndex < rows.length - 1
+                        ? () => onMove(derived.block.id, rows[rowIndex + 1].block.id, "after")
+                        : undefined
+                    }
+                  />
+                )}
+              </div>
             )) : null}
             {/* Subsections after this section's own copy, which is the order
                 they appear in on the page. */}

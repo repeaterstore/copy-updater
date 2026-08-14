@@ -26,6 +26,13 @@ export const BLOCK_ROLES = [
   "listitem",
   "quote",
   "label",
+  /**
+   * A picture, which is copy in the sense that matters here: someone has to be
+   * able to point at it and say it is the wrong one. The image itself is the
+   * designer's job — what this tool owns is the note attached to it and the alt
+   * text, which is the only wording an image carries.
+   */
+  "image",
   "other",
 ] as const;
 export type BlockRole = (typeof BLOCK_ROLES)[number];
@@ -42,6 +49,13 @@ export interface Block {
   id: string;
   tag: string;
   role: BlockRole;
+  /**
+   * An image's alt text, which is the only wording a picture carries.
+   *
+   * Kept on the block because a bare `<img>` is a void element: its innerHTML
+   * is empty, so there is nowhere else for the inspector to read it back from.
+   */
+  alt?: string;
   /** Inline HTML content of the element (its innerHTML). */
   html: string;
   /** Flattened text, used for diffing and AI context. */
@@ -72,11 +86,29 @@ export const EMPTY_META: PageMeta = {
 };
 
 /** The materialised result of applying an op list to a snapshot. */
+/**
+ * Which build of the extractor produced a stored `resolved`.
+ *
+ * `resolved` is derived data cached on the row, and a version keeps whatever
+ * the extractor produced on its last save — potentially for months. Change what
+ * counts as a block and the two sides of a diff stop agreeing: making images
+ * blocks meant a freshly-resolved snapshot had 81 the stored version did not,
+ * so every image on the page read as removed copy in versions nobody had
+ * touched.
+ *
+ * Bump this whenever extraction changes what it emits. Anything stamped with an
+ * older number is rebuilt at start-up, so the fix needs no manual step and no
+ * one has to remember this paragraph exists.
+ */
+export const EXTRACTOR_VERSION = 2;
+
 export interface Resolved {
   blocks: Block[];
   meta: PageMeta;
   /** CSS contributed by addStyle ops, in application order. */
   styles: string[];
+  /** EXTRACTOR_VERSION at the time this was produced; absent means ancient. */
+  v?: number;
 }
 
 // ---------------------------------------------------------------------------

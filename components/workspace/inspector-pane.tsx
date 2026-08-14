@@ -42,6 +42,8 @@ export function InspectorPane({
   onRevertBlock,
   onSetVisibility,
   visibility,
+  altText,
+  onSetAlt,
   sectionBlockIds,
   sectionLabel,
   onSetSectionVisibility,
@@ -63,6 +65,9 @@ export function InspectorPane({
    * times someone had changed it.
    */
   visibility: Visibility;
+  /** The selected image's alt text, resolved from the ops. */
+  altText: string;
+  onSetAlt: (id: string, value: string) => void;
   /** Every block of the section the selection sits in, for the whole-card case. */
   sectionBlockIds: string[] | null;
   sectionLabel: string | null;
@@ -94,6 +99,8 @@ export function InspectorPane({
       onRevert={onRevertBlock}
       onSetVisibility={onSetVisibility}
       visibility={visibility}
+      altText={altText}
+      onSetAlt={onSetAlt}
       sectionBlockIds={sectionBlockIds}
       sectionLabel={sectionLabel}
       onSetSectionVisibility={onSetSectionVisibility}
@@ -130,6 +137,8 @@ function BlockEditor({
   onRevert,
   onSetVisibility,
   visibility,
+  altText,
+  onSetAlt,
   sectionBlockIds,
   sectionLabel,
   onSetSectionVisibility,
@@ -142,6 +151,9 @@ function BlockEditor({
   onRevert: (id: string) => void;
   onSetVisibility: (id: string, mode: Visibility) => void;
   visibility: Visibility;
+  /** Read from the op list, for the same reason `visibility` is. */
+  altText: string;
+  onSetAlt: (id: string, value: string) => void;
   sectionBlockIds: string[] | null;
   sectionLabel: string | null;
   onSetSectionVisibility: (ids: string[], mode: Visibility) => void;
@@ -159,6 +171,16 @@ function BlockEditor({
   }, [derived.html, showHtml]);
 
   const hasMarkup = /<[a-z][^>]*>/i.test(derived.block.html);
+  const isImage = derived.block.role === "image";
+
+  /**
+   * The alt text as it stands, from the op list first and the captured markup
+   * second — the same reason `visibility` is read from the ops rather than the
+   * block: setAttr is resolved on the server, so the block still describes the
+   * captured page until a save round-trips.
+   */
+  const [alt, setAlt] = useState(altText);
+  useEffect(() => setAlt(altText), [altText]);
   const [imageError, setImageError] = useState<string | null>(null);
 
   /**
@@ -260,6 +282,36 @@ function BlockEditor({
       </div>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
+        {isImage ? (
+          /*
+           * A picture has no copy to rewrite, so the editor would be a text box
+           * that does nothing. What it does have is alt text — which is copy,
+           * and the only wording an image carries — and a place to say it is
+           * the wrong picture. Choosing the right one is the designer's job,
+           * and this tool does not pretend to do it.
+           */
+          <section>
+            <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
+              Alt text
+            </p>
+            <textarea
+              className="field min-h-16 resize-y font-sans text-sm"
+              value={alt}
+              readOnly={readOnly}
+              placeholder="What this picture shows, for a screen reader"
+              onChange={(e) => {
+                setAlt(e.target.value);
+                onSetAlt(derived.block.id, e.target.value);
+              }}
+            />
+            <p className="mt-1.5 text-[11px] leading-snug text-[var(--color-ink-faint)]">
+              To ask for a different picture, leave a comment below — it goes to
+              whoever picks the image.
+            </p>
+          </section>
+        ) : null}
+
+        {isImage ? null : (
         <section>
           <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
             Currently on the page
@@ -268,7 +320,9 @@ function BlockEditor({
             {derived.block.text}
           </p>
         </section>
+        )}
 
+        {isImage ? null : (
         <section>
           <div className="mb-1 flex items-center justify-between">
             <p className="text-[10px] font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
@@ -323,6 +377,7 @@ function BlockEditor({
             </button>
           ) : null}
         </section>
+        )}
 
         {!readOnly ? (
           <section className="border-b border-[var(--color-line)] p-3">

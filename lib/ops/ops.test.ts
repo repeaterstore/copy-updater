@@ -7,7 +7,7 @@ import { assignNewIds } from "./ids";
 import { diffResolved } from "./diff";
 import { sanitizeHtml, sanitizeCss } from "./sanitize";
 import { resolveVersion, buildSkeleton } from "./resolve.server";
-import { ID_ATTR, type Op, type Resolved } from "./types";
+import { EXTRACTOR_VERSION, ID_ATTR, type Op, type Resolved } from "./types";
 
 const PAGE = `<!doctype html>
 <html><head>
@@ -340,4 +340,77 @@ test("a picture pasted into a placeholder stays a block", () => {
   // becomes something on the page that nothing in the outline can reach.
   assert.ok(still, `the image block disappeared; blocks are ${after.map((b) => b.id).join(", ")}`);
   assert.match(still.html, /data:image\/jpeg/);
+});
+
+test("a picture is a block, carries its alt text, and can be re-alt-ed", () => {
+  const { doc } = domOf(
+    `<!doctype html><html><body><section><h2>Gallery</h2>
+      <div><img src="/hero.jpg" alt="A rooftop antenna"></div>
+    </section></body></html>`,
+  );
+  stampIds(doc);
+  const blocks = extractBlocks(doc);
+  const image = blocks.find((b) => b.role === "image");
+  assert.ok(image, `no image block; got roles ${blocks.map((b) => b.role).join(", ")}`);
+  assert.equal(image.alt, "A rooftop antenna");
+  assert.equal(image.tag, "img");
+
+  // Alt text is the one piece of wording a picture carries, so it is editable.
+  const result = applyOps(doc, [
+    { t: "setAttr", id: image.id, name: "alt", value: "A DAS antenna on a rooftop" },
+  ]);
+  assert.equal(result.failures.length, 0);
+  assert.equal(extractBlocks(doc).find((b) => b.id === image.id)?.alt, "A DAS antenna on a rooftop");
+});
+
+test("duplicating a block inserts a real copy that keeps its wording", () => {
+  const { doc } = domOf(
+    `<!doctype html><html><body><section class="faq">
+      <div class="faq__item"><h3>Does it work?</h3><p>Yes, it does.</p></div>
+    </section></body></html>`,
+  );
+  stampIds(doc);
+  const before = extractBlocks(doc);
+  const item = doc.querySelector(".faq__item")!;
+  const anchorId = item.getAttribute("data-cu-id")!;
+
+  // What the preview hands back: the real subtree with the tool's own
+  // attributes stripped, then stamped with fresh ids by the caller.
+  const source = item.outerHTML.replace(/ data-cu-id="[^"]*"/g, "");
+  const html = assignNewIds(doc, sanitizeHtml(doc, source));
+  const result = applyOps(doc, [{ t: "insert", refId: anchorId, pos: "after", html }]);
+  assert.equal(result.failures.length, 0);
+
+  const after = extractBlocks(doc);
+  assert.equal(after.length, before.length * 2, "every block of the item was copied");
+  // The wording comes with it — an empty shell is a puzzle, a copy is a start.
+  assert.equal(after.filter((b) => b.text === "Does it work?").length, 2);
+  // And the copy answers to its own ids, not the original's.
+  assert.equal(new Set(after.map((b) => b.id)).size, after.length, "ids are unique");
+  // Classes survive, which is the entire reason for copying off the page.
+  assert.equal(doc.querySelectorAll(".faq__item").length, 2);
+});
+
+test("reordering swaps two blocks and survives a replay", () => {
+  const { doc } = domOf(
+    `<!doctype html><html><body><ul>
+      <li>First</li><li>Second</li><li>Third</li>
+    </ul></body></html>`,
+  );
+  stampIds(doc);
+  const [first, second] = extractBlocks(doc);
+  const ops: Op[] = [{ t: "move", id: second.id, refId: first.id, pos: "before" }];
+  assert.equal(applyOps(doc, ops).failures.length, 0);
+  assert.deepEqual(extractBlocks(doc).map((b) => b.text), ["Second", "First", "Third"]);
+});
+
+test("resolved output is stamped, so a stale cache can be spotted and rebuilt", () => {
+  const { doc } = stamped();
+  const skeleton = buildSkeleton(doc.documentElement.outerHTML);
+  const { resolved } = resolveVersion(skeleton, []);
+  assert.equal(resolved.v, EXTRACTOR_VERSION);
+
+  // What a row saved by an older build looks like, and how it is recognised.
+  const legacy = { blocks: [], meta: resolved.meta, styles: [] };
+  assert.ok(((legacy as { v?: number }).v ?? 0) < EXTRACTOR_VERSION, "stale rows are detectable");
 });

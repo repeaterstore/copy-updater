@@ -13,7 +13,8 @@ import { isAllowedEmail } from "@/auth.config";
 import { capturePage } from "@/lib/capture/capture";
 import { diffResolved } from "@/lib/ops/diff";
 import { assignNewIds } from "@/lib/ops/ids";
-import { resolveVersion } from "@/lib/ops/resolve.server";
+import { buildSkeleton, resolveVersion, sectionMarkupFor } from "@/lib/ops/resolve.server";
+import { extractBlocks, stampIds } from "@/lib/ops/extract";
 import type { Op } from "@/lib/ops/types";
 import { toCsv, toJson, toMarkdown, type ExportContext } from "@/lib/export";
 import { injectRuntime } from "@/lib/preview/inject";
@@ -283,4 +284,40 @@ test("capture → resolve → diff → export round trip", { timeout: 180_000 },
   assert.ok(json.blocks.length >= 3);
   assert.ok(json.meta.find((m: { field: string }) => m.field === "title"));
   assert.deepEqual(json.stylesAdded, [".hero__title { font-size: 52px }"]);
+});
+
+test("section markup gives the model the real nesting to copy", () => {
+  const page = `<!doctype html><html><body><main>
+    <section class="hero"><h1>Coverage that works</h1></section>
+    <section class="faq wrapper">
+      <h2>Questions</h2>
+      <div class="faq__item"><h3 class="q">Does it work?</h3><p class="a">Yes.</p></div>
+    </section>
+  </main></body></html>`;
+  const dom = new JSDOM(page);
+  stampIds(dom.window.document);
+  const skeleton = buildSkeleton(dom.window.document.documentElement.outerHTML);
+  const blocks = extractBlocks(dom.window.document);
+  const answer = blocks.find((b) => b.text === "Yes.")!;
+
+  const markup = sectionMarkupFor(skeleton, [], [answer.id]);
+  assert.ok(markup, "found the enclosing section");
+  // The class names are the whole point: they are what makes generated markup
+  // look native rather than like a generic template.
+  assert.match(markup, /faq__item/);
+  assert.match(markup, /class="q"/);
+  // And it stops at the section, rather than handing over the whole page.
+  assert.ok(!markup.includes("Coverage that works"), "did not swallow the hero");
+});
+
+test("section markup is capped rather than dropped when the section is huge", () => {
+  const rows = Array.from({ length: 400 }, (_, i) => `<p class="row">Row number ${i}.</p>`).join("");
+  const dom = new JSDOM(`<!doctype html><html><body><main><section>${rows}</section></main></body></html>`);
+  stampIds(dom.window.document);
+  const skeleton = buildSkeleton(dom.window.document.documentElement.outerHTML);
+  const first = extractBlocks(dom.window.document)[0];
+
+  const markup = sectionMarkupFor(skeleton, [], [first.id], 500);
+  assert.ok(markup && markup.length < 700, `expected a capped string, got ${markup?.length}`);
+  assert.match(markup, /truncated/);
 });

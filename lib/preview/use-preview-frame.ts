@@ -9,6 +9,12 @@ import {
   type HostMessage,
 } from "./protocol";
 
+/** The markup of something on the page, and the element it came from. */
+export interface ReadMarkupResult {
+  html: string;
+  anchorId: string;
+}
+
 export interface PreviewFrameApi {
   ref: React.RefObject<HTMLIFrameElement | null>;
   ready: boolean;
@@ -19,6 +25,14 @@ export interface PreviewFrameApi {
   setEditable: (on: boolean) => void;
   selectBlock: (id: string | null) => void;
   scrollToBlock: (id: string) => void;
+  /**
+   * The real markup of a block, or of the section enclosing it.
+   *
+   * Resolves to null when the frame cannot find it, or does not answer within
+   * a couple of seconds — a duplicate that never resolves would leave the
+   * button spinning with nothing to say.
+   */
+  readMarkup: (id: string, enclosing: boolean) => Promise<ReadMarkupResult | null>;
 }
 
 export interface PreviewFrameHandlers {
@@ -38,6 +52,8 @@ export function usePreviewFrame(handlers: PreviewFrameHandlers): PreviewFrameApi
   const ref = useRef<HTMLIFrameElement | null>(null);
   const [ready, setReady] = useState(false);
   const queue = useRef<HostMessage[]>([]);
+  /** Resolvers for in-flight readMarkup calls, keyed by request id. */
+  const markupWaiters = useRef(new Map<string, (result: ReadMarkupResult | null) => void>());
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
   /**
@@ -109,6 +125,18 @@ export function usePreviewFrame(handlers: PreviewFrameHandlers): PreviewFrameApi
             handlersRef.current.onApplyFailures?.(message.failures);
           }
           break;
+        case "markup": {
+          const pending = markupWaiters.current.get(message.requestId);
+          if (pending) {
+            markupWaiters.current.delete(message.requestId);
+            pending(
+              message.html && message.anchorId
+                ? { html: message.html, anchorId: message.anchorId }
+                : null,
+            );
+          }
+          break;
+        }
       }
     }
 
@@ -145,12 +173,30 @@ export function usePreviewFrame(handlers: PreviewFrameHandlers): PreviewFrameApi
     [send],
   );
 
+  const readMarkup = useCallback(
+    (id: string, enclosing: boolean) =>
+      new Promise<ReadMarkupResult | null>((resolve) => {
+        const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        markupWaiters.current.set(requestId, resolve);
+        // The frame is sandboxed third-party markup that could in principle
+        // never reply; a caller waiting forever is worse than a caller told no.
+        setTimeout(() => {
+          if (markupWaiters.current.delete(requestId)) resolve(null);
+        }, 2000);
+        send({ channel: PREVIEW_CHANNEL, type: "readMarkup", requestId, id, enclosing });
+      }),
+    [send],
+  );
+
   // Stable identity. Returning a fresh object each render makes this API an
   // ever-changing effect dependency in the workspace, so the debounced
   // "apply ops to the preview" effect tears down and rebuilds its timer on
   // every render instead of firing.
   return useMemo(
-    () => ({ ref, ready, onLoad: markReady, applyOps, setDiffMode, setEditable, selectBlock, scrollToBlock }),
-    [ready, markReady, applyOps, setDiffMode, setEditable, selectBlock, scrollToBlock],
+    () => ({
+      ref, ready, onLoad: markReady, applyOps, setDiffMode, setEditable,
+      selectBlock, scrollToBlock, readMarkup,
+    }),
+    [ready, markReady, applyOps, setDiffMode, setEditable, selectBlock, scrollToBlock, readMarkup],
   );
 }
