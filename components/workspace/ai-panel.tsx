@@ -547,6 +547,17 @@ export function AiPanel({
               this page&rsquo;s own classes. Apply an option to see it in place —
               trying another replaces it.
             </p>
+            {/* Writing whole sections is the slowest thing this asks for, and
+                each option is another one written from scratch. Measured on the
+                DAS page with Opus at high reasoning: one option 108s, three
+                201s — about a minute of setup plus fifty seconds a section.
+                Saying so beforehand beats a reviewer deciding it has hung. */}
+            <p className="mt-1 text-[10px] leading-snug text-[var(--color-changed)]">
+              {optionCount === 1
+                ? "Expect around two minutes — it writes the whole section."
+                : `${optionCount} whole sections to write — expect around ` +
+                  `${Math.round((60 + 47 * optionCount) / 60)} minutes.`}
+            </p>
           </div>
         ) : (
           <textarea

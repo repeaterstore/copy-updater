@@ -24,16 +24,31 @@ export const dynamic = "force-dynamic";
 /**
  * How long a suggestion may take before it is called a failure.
  *
- * Nothing else bounded this. The only signal reaching the provider was the
- * reviewer's own Stop, so a stalled upstream left the request open with the
- * button stuck on "Stop" and no options, no error and no end — the failure
- * mode that looks exactly like the tool being broken.
+ * Scaled to what was asked for, because a flat ceiling is wrong in both
+ * directions. Rewriting one headline should not be allowed to hang for four
+ * minutes; writing three complete sections of markup legitimately takes longer
+ * than that, and a fixed four minutes killed it just short of the finish.
  *
- * Four minutes is deliberately generous: a layout request at high reasoning
- * across four models legitimately runs to a couple of minutes, and cutting a
- * real answer short is worse than waiting. What matters is that it ends.
+ * Measured, not guessed: a three-option add against waveform.com's DAS page —
+ * Opus at high reasoning, writing three full sections with the page's own
+ * classes — completed in 201 seconds. The old ceiling gave it 240, so a clean
+ * run scraped through and any retry at all went over.
+ *
+ * The per-option allowance dominates because output is what costs time here:
+ * each option is a complete section of HTML, not a sentence.
  */
-const REQUEST_DEADLINE_MS = 4 * 60_000;
+const DEADLINE_BASE_MS = 90_000;
+const DEADLINE_PER_OPTION_MS = 75_000;
+/** Nothing is worth waiting longer than this, whatever was asked for. */
+const DEADLINE_CEILING_MS = 10 * 60_000;
+
+function deadlineFor(optionCount: number, structural: boolean): number {
+  const perOption = structural ? DEADLINE_PER_OPTION_MS : DEADLINE_PER_OPTION_MS / 3;
+  return Math.min(
+    DEADLINE_CEILING_MS,
+    DEADLINE_BASE_MS + perOption * Math.max(1, optionCount),
+  );
+}
 
 export interface SuggestRequest {
   versionId: string;
@@ -245,7 +260,11 @@ export async function POST(request: Request) {
 
       // Composed rather than either alone: Stop must still be instant, and a
       // provider that never answers must still end.
-      const deadline = AbortSignal.timeout(REQUEST_DEADLINE_MS);
+      const deadlineMs = deadlineFor(
+        Math.min(Math.max(input.optionCount, 1), 5),
+        mode === "layout",
+      );
+      const deadline = AbortSignal.timeout(deadlineMs);
       const signal = AbortSignal.any([request.signal, deadline]);
 
       try {
@@ -319,8 +338,9 @@ export async function POST(request: Request) {
         // read an error — the reviewer already knows, they pressed Stop.
         if (!request.signal.aborted) {
           const message = deadline.aborted
-            ? "The request ran past four minutes with no answer and was stopped. " +
-              "The provider may be stalling — try again, or pick a different model."
+            ? `No answer after ${Math.round(deadlineMs / 60_000)} minutes, so the ` +
+              "request was stopped. Writing whole sections is the slowest thing " +
+              "this asks for — try fewer options, or a faster model."
             : describeAiError(error);
           await db.insert(schema.aiRuns).values({
             versionId: input.versionId,
