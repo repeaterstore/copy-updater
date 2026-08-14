@@ -351,11 +351,20 @@ function watchKeys(): void {
     if (!selection || selection.rangeCount === 0) return;
     const range = selection.getRangeAt(0);
 
+    /*
+     * The editable block, not the nearest element carrying an id.
+     *
+     * Every element in a snapshot is stamped, so `closest([data-cu-id])` finds
+     * whatever inline span the caret happens to be inside — and splitting that
+     * yields two spans side by side on the same line, which reads as Enter
+     * doing nothing at all. `contenteditable` is set on exactly one element per
+     * editable block, which is the unit a paragraph break divides.
+     */
     const el = (range.startContainer.nodeType === 1
       ? (range.startContainer as Element)
       : range.startContainer.parentElement
-    )?.closest(`[${ID_ATTR}]`);
-    if (!el || !isLeafTextBlock(el)) return;
+    )?.closest('[contenteditable="true"]');
+    if (!el) return;
 
     event.preventDefault();
 
@@ -375,6 +384,11 @@ function watchKeys(): void {
 
     const id = el.getAttribute(ID_ATTR);
     if (!id) return;
+
+    // Enter over a selection replaces it, as it does in every editor. Without
+    // this the selected words stay in the first half and are duplicated at the
+    // top of the second — pressing Enter to overwrite a phrase doubled it.
+    if (!range.collapsed) range.deleteContents();
 
     // Everything from the caret to the end of the block moves out of it.
     const tail = range.cloneRange();
