@@ -36,7 +36,13 @@ import {
   wideViewport,
   type Device,
 } from "./preview-pane";
-import { InspectorPane, visibilityOf, type Visibility } from "./inspector-pane";
+import { InspectorPane } from "./inspector-pane";
+import {
+  RECIPES,
+  applyVisibility,
+  visibilityOf,
+  type Visibility,
+} from "@/lib/ops/responsive";
 import { MetaCompare } from "./meta-compare";
 import { OutlinePane } from "./outline-pane";
 
@@ -133,6 +139,13 @@ export function Workspace({
   const [editMode, setEditMode] = useState(true);
   const [pane, setPane] = useState<Pane>("preview");
   const [problems, setProblems] = useState<string[]>([]);
+  /**
+   * The responsive convention this page's stylesheet defines, once the frame
+   * has looked. Null means the page has none this tool recognises, and the
+   * Shows on control stays hidden rather than writing classes that would do
+   * nothing on the real site.
+   */
+  const [recipeId, setRecipeId] = useState<string | null>(null);
   const [isSaving, startSaving] = useTransition();
 
   const readOnly = version.status === "approved";
@@ -196,6 +209,7 @@ export function Workspace({
     },
     onBlockEdited: (id, html) => upsertText(id, html),
     onBlockSplit: (id, before, after) => splitBlock(id, before, after),
+    onResponsive: setRecipeId,
     onApplyFailures: (failures) =>
       setProblems(failures.map((f) => `${f.id || "(unknown)"}: ${f.reason}`)),
   });
@@ -414,8 +428,29 @@ export function Workspace({
    */
   const splitBlock = useCallback(
     (id: string, before: string, after: string) => {
-      const html = assignNewIds(document, sanitizeHtml(document, after));
+      const block = derivedByIdRef.current.get(id)?.block;
+      if (!block) return;
+
       setOps((current) => {
+        /*
+         * The new block is the old one's tag and classes around the tail.
+         *
+         * Built here rather than in either editor, because both of them would
+         * otherwise have to know how to make one and they would drift — one of
+         * them did, handing over bare inner markup that landed in the page as a
+         * loose text node with no tag, no id, nothing in the outline, and under
+         * a `<ul>` not even valid.
+         */
+        const classes = classesNow(current, block);
+        const attr = classes.length
+          ? ` class="${classes.join(" ").replace(/&/g, "&amp;").replace(/"/g, "&quot;")}"`
+          : "";
+        const tag = /^[a-z][a-z0-9]*$/i.test(block.tag) ? block.tag : "p";
+        const html = assignNewIds(
+          document,
+          sanitizeHtml(document, `<${tag}${attr}>${after}</${tag}>`),
+        );
+
         const withoutText = current.filter((op) => !(op.t === "setText" && op.id === id));
         return [
           ...withoutText,
@@ -468,13 +503,32 @@ export function Workspace({
       );
       if (!owning) return current.filter((op) => !("id" in op && op.id === id));
 
-      const orphaned = new Set(
-        [...(owning.t === "insert" ? owning.html.matchAll(/data-cu-id="([^"]+)"/g) : [])].map(
-          (m) => m[1],
-        ),
-      );
+      /*
+       * Everything that only exists because this fragment does.
+       *
+       * Grown to a fixed point rather than read off the one op, because an
+       * insert can be anchored *inside* another insert's markup — a bullet
+       * added to a list that was itself added. Collecting one level dropped the
+       * nested insert but kept the ops written against the ids it introduced,
+       * which then referred to nothing and failed on every future save.
+       */
+      const doomed = new Set<Op>([owning]);
+      const orphaned = new Set<string>();
+      const idsIn = (op: Op) =>
+        op.t === "insert" ? [...op.html.matchAll(/data-cu-id="([^"]+)"/g)].map((m) => m[1]) : [];
+
+      for (let pass = 0; pass < 10; pass += 1) {
+        const before = orphaned.size;
+        for (const op of doomed) for (const each of idsIn(op)) orphaned.add(each);
+        for (const op of current) {
+          if (op.t !== "insert") continue;
+          if (orphaned.has(op.refId)) doomed.add(op);
+        }
+        if (orphaned.size === before) break;
+      }
+
       return current.filter((op) => {
-        if (op === owning) return false;
+        if (doomed.has(op)) return false;
         if ("id" in op && typeof op.id === "string" && orphaned.has(op.id)) return false;
         if ("refId" in op && typeof op.refId === "string" && orphaned.has(op.refId)) return false;
         return true;
@@ -639,14 +693,11 @@ export function Workspace({
   const setVisibility = useCallback(
     (id: string, mode: Visibility) => {
       const block = derivedByIdRef.current.get(id)?.block;
-      if (!block) return;
+      const recipe = RECIPES.find((r) => r.id === recipeId);
+      if (!block || !recipe) return;
 
       setOps((current) => {
-        const kept = classesNow(current, block).filter(
-          (c) => c !== "cu-only-desktop" && c !== "cu-only-mobile",
-        );
-        const next =
-          mode === "both" ? kept : [...kept, mode === "desktop" ? "cu-only-desktop" : "cu-only-mobile"];
+        const next = applyVisibility(classesNow(current, block), recipe, mode);
 
         let ops = current.filter(
           (op) => !(op.t === "setAttr" && op.id === id && op.name === "class"),
@@ -660,12 +711,10 @@ export function Workspace({
         }
 
         /*
-         * The stylesheet exists only while something uses it.
-         *
-         * Carried per version rather than injected globally: a version is meant
-         * to be a complete description of its own changes, and one that relies
-         * on CSS the app happens to add would export as markup referencing
-         * classes nothing defines.
+         * Older versions carried a stylesheet defining two classes of this
+         * tool's own. Nothing writes those any more — the page's own utilities
+         * are used instead — so the stylesheet goes as soon as the last block
+         * relying on it is changed, and stays while any still does.
          */
         const stillUsed = ops.some(
           (op) =>
@@ -680,7 +729,7 @@ export function Workspace({
         return ops;
       });
     },
-    [],
+    [recipeId],
   );
 
   /**
@@ -809,9 +858,10 @@ export function Workspace({
    * Read from the op list rather than from the block, so the control reflects a
    * change the moment it is made instead of after the next save.
    */
+  const recipe = useMemo(() => RECIPES.find((r) => r.id === recipeId) ?? null, [recipeId]);
   const selectedVisibility: Visibility = useMemo(
-    () => (selected ? visibilityOf(classesNow(ops, selected.block)) : "both"),
-    [ops, selected],
+    () => (selected ? visibilityOf(classesNow(ops, selected.block), recipe) : "both"),
+    [ops, selected, recipe],
   );
   /**
    * The selected image's alt text, ops first and captured markup second.
@@ -1085,6 +1135,7 @@ export function Workspace({
             onSplit={splitBlock}
             onSetVisibility={setVisibility}
             visibility={selectedVisibility}
+            responsiveLabel={recipe?.label ?? null}
             altText={selectedAlt}
             onSetAlt={setAlt}
             sectionBlockIds={section?.blockIds ?? null}

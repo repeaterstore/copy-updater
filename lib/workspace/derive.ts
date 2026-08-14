@@ -714,9 +714,17 @@ export function sectionScopeFor(
   // Subsections included. The outline counts a section's whole subtree and the
   // heading names all of it, so scoping to the parent's own paragraphs and
   // silently dropping its children rewrote a fraction of what was asked for.
-  // Blocks this version proposes deleting are not copy to rewrite. Sending
-  // them would have the model politely improve wording that is on its way out.
-  const all = sectionBlocks(found).filter((d) => !d.removed);
+  /*
+   * What the model is asked to rewrite: copy, and only copy.
+   *
+   * Blocks on their way out are excluded — the model would politely improve
+   * wording that is being deleted — and so are images, which have no wording at
+   * all. Images matter here beyond being useless: a page carries far more of
+   * them than copy, and every one of them counted against the cap on how many
+   * blocks a section request may include, so an image-heavy section had its
+   * real copy trimmed away before the request was even sent.
+   */
+  const all = sectionBlocks(found).filter((d) => !d.removed && d.block.role !== "image");
   const visible = all.filter((d) => isVisible(d.block));
   const usable = visible.length > 0 ? visible : all;
 

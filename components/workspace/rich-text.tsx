@@ -117,20 +117,24 @@ export function RichText({
           if (!selection || selection.rangeCount === 0) return;
           const range = selection.getRangeAt(0);
 
-          const tail = range.cloneRange();
-          tail.selectNodeContents(el);
-          tail.setStart(range.endContainer, range.endOffset);
-          const moved = tail.cloneContents();
-          const holder = document.createElement("div");
-          holder.appendChild(moved);
+          const inner = (make: (r: Range) => void) => {
+            const clone = range.cloneRange();
+            clone.selectNodeContents(el);
+            make(clone);
+            const holder = document.createElement("div");
+            holder.appendChild(clone.cloneContents());
+            return holder.innerHTML;
+          };
 
-          const head = range.cloneRange();
-          head.selectNodeContents(el);
-          head.setEnd(range.startContainer, range.startOffset);
-          const headHolder = document.createElement("div");
-          headHolder.appendChild(head.cloneContents());
+          const head = inner((r) => r.setEnd(range.startContainer, range.startOffset));
+          const tail = inner((r) => r.setStart(range.endContainer, range.endOffset));
 
-          onSplit(headHolder.innerHTML, holder.innerHTML);
+          // The caller inserts this as a complete element, so it has to be one.
+          // Handing over bare inner markup put a loose text node into the page:
+          // no tag, no id, absent from the outline, and under a <ul> not even
+          // valid. The block's own tag and classes are what the new sibling
+          // wears, exactly as the preview builds it.
+          onSplit(head, tail);
         }}
         className={`field min-h-16 whitespace-pre-wrap ${className ?? ""}`}
       />

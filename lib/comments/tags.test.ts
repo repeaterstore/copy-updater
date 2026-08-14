@@ -46,3 +46,11 @@ test("design notes group with the busiest pages first", async () => {
   assert.deepEqual(grouped.map((g) => g.pageName), ["Beta", "Gamma", "Alpha"]);
   assert.equal(grouped[0].notes.length, 2);
 });
+
+test("a hyphenated handle is not a design note", () => {
+  // `\b` is satisfied by a hyphen, so these all queued for the designer and
+  // then displayed mangled as "-system".
+  assert.ok(!isForDesigner("The @design-system needs a new token"));
+  assert.ok(!isForDesigner("Filed under @design-review"));
+  assert.ok(isForDesigner("@design can you look"), "the real tag still counts");
+});

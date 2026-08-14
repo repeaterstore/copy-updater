@@ -54,6 +54,14 @@ export type HostMessage =
 
 export type FrameMessage =
   | { channel: typeof PREVIEW_CHANNEL; type: "ready" }
+  /**
+   * Which responsive-visibility convention this page's own CSS defines.
+   *
+   * Reported by the frame because only the frame has the stylesheets: the
+   * skeleton the server works from has them stripped out, and the snapshot is
+   * megabytes of inlined CSS that nothing else needs to parse.
+   */
+  | { channel: typeof PREVIEW_CHANNEL; type: "responsive"; recipeId: string | null }
   | { channel: typeof PREVIEW_CHANNEL; type: "blockClicked"; id: string }
   | { channel: typeof PREVIEW_CHANNEL; type: "blockEdited"; id: string; html: string }
   /**
@@ -70,9 +78,16 @@ export type FrameMessage =
       channel: typeof PREVIEW_CHANNEL;
       type: "blockSplit";
       id: string;
-      /** What stays in the original block. */
+      /** What stays in the original block, as inner markup. */
       before: string;
-      /** The new sibling, as complete markup with the tool's attributes stripped. */
+      /**
+       * What moves into the new block, also as inner markup.
+       *
+       * Inner, not a complete element: the host knows the block's tag and its
+       * current classes — including any this version has already changed — and
+       * building the sibling in one place keeps the two editors from disagreeing
+       * about what a new block is made of.
+       */
       after: string;
     }
   | { channel: typeof PREVIEW_CHANNEL; type: "applied"; failures: { id: string; reason: string }[] }

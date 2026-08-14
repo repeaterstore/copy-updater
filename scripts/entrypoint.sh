@@ -9,6 +9,9 @@ set -e
 chown -R pwuser:pwuser /data
 
 # rebuild-stale only does work when the extractor has changed since a version
-# was last saved, and always exits 0 — see the script for why the boot must not
-# depend on it.
-exec su -s /bin/sh pwuser -c "node_modules/.bin/tsx scripts/migrate.ts && node_modules/.bin/tsx scripts/rebuild-stale.ts && node server.js"
+# was last saved. Its failure is tolerated *here* rather than trusted to the
+# script: it catches its own errors and exits 0, but a module that throws while
+# being imported never reaches that handler, and `set -e` would then take the
+# whole container down over a stale cache. A stale diff is recoverable; a
+# container that will not boot is the tool being down.
+exec su -s /bin/sh pwuser -c "node_modules/.bin/tsx scripts/migrate.ts && { node_modules/.bin/tsx scripts/rebuild-stale.ts || echo '[entrypoint] rebuild-stale failed; continuing'; } && node server.js"

@@ -14,10 +14,12 @@
 export const DESIGN_TAG = "@design";
 
 /**
- * Word-boundary matched, so `@designer` counts and `hello@design.com` does not.
- * The trailing guard is what keeps an email address out of the designer's list.
+ * `@designer` counts; `hello@design.com` does not, and neither does
+ * `@design-system` — a word boundary is satisfied by a hyphen, so `\b` alone
+ * put every mention of a design system into the designer's queue and then
+ * displayed it mangled as "-system".
  */
-const DESIGN_PATTERN = /(^|[^\w@.])@design(er)?\b/i;
+const DESIGN_PATTERN = /(^|[^\w@.])@design(er)?(?![\w-])/i;
 
 export function isForDesigner(body: string): boolean {
   return DESIGN_PATTERN.test(body);
@@ -28,5 +30,5 @@ export function isForDesigner(body: string): boolean {
  * entirely design notes. Collapses the space the tag leaves behind.
  */
 export function withoutDesignTag(body: string): string {
-  return body.replace(/(^|[^\w@.])@design(er)?\b/gi, "$1").replace(/\s{2,}/g, " ").trim();
+  return body.replace(/(^|[^\w@.])@design(er)?(?![\w-])/gi, "$1").replace(/\s{2,}/g, " ").trim();
 }

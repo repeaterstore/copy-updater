@@ -42,8 +42,20 @@ async function main() {
   let done = 0;
   for (const version of stale) {
     try {
-      await rebuildResolved(version.id);
+      const { failures } = await rebuildResolved(version.id);
       done += 1;
+      // Reported rather than swallowed. The ops are untouched — they are the
+      // source of truth and this only recomputes the cache — but an op that no
+      // longer applies is a version whose diff is quietly smaller than its
+      // author intended, and nobody would otherwise ever hear about it.
+      if (failures.length > 0) {
+        console.log(
+          `[rebuild-stale]   ! ${version.label}: ${failures.length} op(s) no longer apply`,
+        );
+        for (const failure of failures.slice(0, 5)) {
+          console.log(`[rebuild-stale]       ${failure.reason}`);
+        }
+      }
     } catch (error) {
       console.log(
         `[rebuild-stale]   ✗ ${version.label}: ${error instanceof Error ? error.message : String(error)}`,

@@ -71,7 +71,9 @@ test("Enter splits the editable block, not the span the caret sits in", async ()
   // The paragraph's id, not the span's — splitting the span would put two
   // spans side by side on one line, which reads as Enter doing nothing.
   assert.equal(split.id, para.getAttribute("data-cu-id"));
-  assert.match(String(split.after), /^<p class="lede">/);
+  // Inner markup: the host wraps it in the block's own tag and classes.
+  assert.ok(!String(split.after).startsWith("<p"), "not a whole element");
+  assert.match(String(split.after), /fluff\./);
   assert.ok(!String(split.after).includes("data-cu-id"), "the copy carries no borrowed ids");
   assert.match(String(split.before), /Our team will review your floorplans\./);
   assert.match(String(split.before), /Zero /, "the words before the caret stayed put");

@@ -44,6 +44,7 @@ export function InspectorPane({
   onSplit,
   onSetVisibility,
   visibility,
+  responsiveLabel,
   altText,
   onSetAlt,
   sectionBlockIds,
@@ -69,6 +70,8 @@ export function InspectorPane({
    * times someone had changed it.
    */
   visibility: Visibility;
+  /** Null when the page defines no responsive convention; the control hides. */
+  responsiveLabel: string | null;
   /** The selected image's alt text, resolved from the ops. */
   altText: string;
   onSetAlt: (id: string, value: string) => void;
@@ -104,6 +107,7 @@ export function InspectorPane({
       onSplit={onSplit}
       onSetVisibility={onSetVisibility}
       visibility={visibility}
+      responsiveLabel={responsiveLabel}
       altText={altText}
       onSetAlt={onSetAlt}
       sectionBlockIds={sectionBlockIds}
@@ -143,6 +147,7 @@ function BlockEditor({
   onSplit,
   onSetVisibility,
   visibility,
+  responsiveLabel,
   altText,
   onSetAlt,
   sectionBlockIds,
@@ -158,6 +163,12 @@ function BlockEditor({
   onSplit?: (id: string, before: string, after: string) => void;
   onSetVisibility: (id: string, mode: Visibility) => void;
   visibility: Visibility;
+  /**
+   * How this page says "hide on mobile", named — or null when its stylesheet
+   * has no such convention, in which case the control is not offered. A button
+   * that writes a class the site does not define does nothing and says nothing.
+   */
+  responsiveLabel: string | null;
   /** Read from the op list, for the same reason `visibility` is. */
   altText: string;
   onSetAlt: (id: string, value: string) => void;
@@ -358,7 +369,14 @@ function BlockEditor({
 
           {/* The markup view stays a plain field: it is markup, and a rich
               editor would render the tags someone opened it to read. */}
-          {showHtml ? (
+          {derived.removed ? (
+            /* The one thing left to do with copy on its way out is keep it.
+               Offering an editor would produce a setText the server applies
+               after the remove and then fails. */
+            <p className="rounded-md border border-dashed border-[var(--color-removed)] px-2.5 py-2 text-xs text-[var(--color-ink-soft)]">
+              This block is marked for deletion. Revert it to edit it again.
+            </p>
+          ) : showHtml ? (
             <textarea
               className="field min-h-24 resize-y"
               style={{ fontFamily: "var(--font-mono)", fontSize: "0.75rem" }}
@@ -409,10 +427,20 @@ function BlockEditor({
         </section>
         )}
 
-        {!readOnly ? (
+        {/* Offered only where the page has a convention for it. A site with no
+            responsive utilities cannot be told to hide something on mobile
+            without inventing classes it does not define — which exports as a
+            change a developer has to translate before they can implement it. */}
+        {!readOnly && responsiveLabel ? (
           <section className="border-b border-[var(--color-line)] p-3">
-            <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
+            <p className="mb-1.5 flex items-baseline gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--color-ink-faint)]">
               Shows on
+              <span
+                className="font-normal normal-case tracking-normal opacity-80"
+                title="The classes this page already uses for it, so the change is one a developer can implement as written"
+              >
+                {responsiveLabel}
+              </span>
             </p>
             <div className="flex overflow-hidden rounded-lg border border-[var(--color-line-strong)]">
               {(

@@ -51,9 +51,17 @@ export function DesignNoteRow({ note }: { note: DesignNote }) {
         <div className="min-w-0 flex-1">
           <p className={`text-sm ${resolved ? "line-through" : ""}`}>{note.body}</p>
 
-          {note.blockText ? (
+          {note.blockRole === "image" ? (
+            // Checked before the text, because an image has none — testing text
+            // first filed every image note under the page title.
+            <p className="mt-1 text-[11px] text-[var(--color-ink-faint)]">on an image</p>
+          ) : note.blockText ? (
             <p className="mt-1 truncate text-[11px] text-[var(--color-ink-faint)]">
-              on {note.blockRole === "image" ? "an image" : `“${note.blockText}”`}
+              on “{note.blockText}”
+            </p>
+          ) : note.blockId ? (
+            <p className="mt-1 text-[11px] text-[var(--color-ink-faint)]">
+              on a block that is no longer on the page
             </p>
           ) : (
             <p className="mt-1 text-[11px] text-[var(--color-ink-faint)]">

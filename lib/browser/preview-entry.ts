@@ -9,7 +9,8 @@ import { cssEscape, isBlockCandidate } from "../ops/extract";
 import { sanitizeHtml } from "../ops/sanitize";
 import { applyWithUndo, runUndo, type UndoEntry } from "../ops/undo";
 import { ID_ATTR } from "../ops/types";
-import { cleanMarkup, enclosingSection } from "../ops/section-scope";
+import { cleanInnerMarkup, cleanMarkup, enclosingSection } from "../ops/section-scope";
+import { detectRecipe } from "../ops/responsive";
 import {
   PREVIEW_CHANNEL,
   type DiffHighlights,
@@ -132,6 +133,19 @@ function clearDecorations(): void {
 function paintDiff(): void {
   clearDecorations();
   if (!diffOn || !highlights) return;
+
+  /*
+   * Copy on its way out cannot be typed into.
+   *
+   * While the diff is on, a removed block is still in the page so it can be
+   * seen and put back — and being still in the page, it was still editable. An
+   * edit to it appends a setText after the remove: the frame shows the typing
+   * working, the server applies the remove and then fails the edit, and the
+   * reviewer gets a failure banner and different content on reload.
+   */
+  for (const id of highlights.removed) {
+    byId(id)?.removeAttribute("contenteditable");
+  }
   // Order matters: a block that both changed and moved should read as changed,
   // and a growth warning should not mask an actual edit.
   const layers: [string, string[]][] = [
@@ -229,6 +243,8 @@ function setEditable(on: boolean): void {
       continue;
     }
     if (!isLeafTextBlock(el)) continue;
+    // Deleted copy stays visible to be restored, never to be rewritten.
+    if (highlights?.removed.includes(el.getAttribute(ID_ATTR) ?? "")) continue;
 
     // Mark only the outermost editable block. A heading made of styled spans
     // qualifies, and so does every span inside it — nesting contenteditable
@@ -396,15 +412,20 @@ function watchKeys(): void {
     tail.setStart(range.endContainer, range.endOffset);
     const moved = tail.extractContents();
 
-    const sibling = el.cloneNode(false) as Element;
-    sibling.appendChild(moved);
+    const holder = document.createElement("div");
+    holder.appendChild(moved);
+
+    // The block was mutated directly, which fires no input event — so without
+    // this the next replay would take the already-truncated first half as the
+    // block's pristine state, and reverting the split would lose the tail.
+    typedInto.add(id);
 
     post({
       channel: PREVIEW_CHANNEL,
       type: "blockSplit",
       id,
       before: sanitizeHtml(document, el.innerHTML),
-      after: cleanMarkup(sibling),
+      after: sanitizeHtml(document, cleanInnerMarkup(holder)),
     });
   });
 }
@@ -638,6 +659,57 @@ function handle(message: HostMessage): void {
 }
 
 
+
+/**
+ * Every class this page's stylesheets define a rule for.
+ *
+ * Read from the CSSOM rather than by parsing text: the browser has already
+ * done the work, and it resolves the escaping — `.md\\:block` in the source
+ * arrives here as `md:block`, which is what the markup says.
+ *
+ * Runs once, off the critical path. A snapshot carries every stylesheet the
+ * page had inlined into it, which on waveform.com is three megabytes, so this
+ * is not something to do while the reviewer is waiting to see the page.
+ */
+function definedClasses(): Set<string> {
+  const found = new Set<string>();
+  const visit = (rules: CSSRuleList | undefined) => {
+    if (!rules) return;
+    for (const rule of Array.from(rules)) {
+      visit((rule as CSSGroupingRule).cssRules);
+      const selector = (rule as CSSStyleRule).selectorText;
+      if (!selector) continue;
+      for (const match of selector.matchAll(/\.((?:[\w-]|\\.)+)/g)) {
+        found.add(match[1].replace(/\\/g, ""));
+      }
+    }
+  };
+  for (const sheet of Array.from(document.styleSheets)) {
+    try {
+      visit(sheet.cssRules);
+    } catch {
+      // A stylesheet the frame may not read. Inlined snapshots have none, but
+      // one unreadable sheet must not cost the whole detection.
+    }
+  }
+  return found;
+}
+
+function reportResponsive(): void {
+  setTimeout(() => {
+    try {
+      const used = new Set<string>();
+      for (const el of Array.from(document.querySelectorAll("[class]"))) {
+        for (const name of Array.from(el.classList)) used.add(name);
+      }
+      const recipe = detectRecipe(definedClasses(), used);
+      post({ channel: PREVIEW_CHANNEL, type: "responsive", recipeId: recipe?.id ?? null });
+    } catch {
+      post({ channel: PREVIEW_CHANNEL, type: "responsive", recipeId: null });
+    }
+  }, 0);
+}
+
 function start(): void {
   if (!document.body) return;
   // Before anything can change the document, so this really is the snapshot.
@@ -654,6 +726,7 @@ function start(): void {
   });
 
   post({ channel: PREVIEW_CHANNEL, type: "ready" });
+  reportResponsive();
 }
 
 if (document.readyState === "loading") {

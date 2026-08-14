@@ -378,9 +378,16 @@ export async function generateSuggestions(
          * model had the answer, it just wrote it down in the wrong form.
          */
         if (NoObjectGeneratedError.isInstance(error)) {
+          // Parsed against the same schema the request declared, not merely
+          // checked for an `options` array. Recovering an object is a guess
+          // about what the model meant; letting a malformed guess through would
+          // fail later in validation, where there is no retry left to take.
           const salvaged = salvageObject(error.text);
-          if (salvaged) {
-            result = { object: salvaged } as typeof result;
+          const checked = salvaged
+            ? z.object({ options: z.array(schema) }).safeParse(salvaged)
+            : null;
+          if (checked?.success) {
+            result = { object: checked.data } as typeof result;
             break;
           }
           if (index < attempts.length - 1) {

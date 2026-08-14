@@ -63,9 +63,25 @@ export function enclosingSection(el: Element): Element {
  * once this markup becomes an op.
  */
 export function cleanMarkup(el: Element): string {
+  return stripped(el).outerHTML;
+}
+
+/**
+ * The same, for content that is about to be wrapped in a new element.
+ *
+ * Splitting a block moves part of it into a new one, and the part that moves
+ * routinely contains stamped inline markup — the `<span>` a phrase sits in.
+ * Carried over as-is, the new block would hold a second element answering to
+ * an id that already exists further up the page.
+ */
+export function cleanInnerMarkup(el: Element): string {
+  return stripped(el).innerHTML;
+}
+
+function stripped(el: Element): Element {
   const clone = el.cloneNode(true) as Element;
   for (const node of [clone, ...Array.from(clone.querySelectorAll("*"))]) {
     for (const attr of TOOL_ATTRS) node.removeAttribute(attr);
   }
-  return clone.outerHTML;
+  return clone;
 }
