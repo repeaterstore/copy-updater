@@ -187,12 +187,23 @@ function AddSectionButton({
 function RowTools({
   label,
   busy,
+  removed,
+  undoable,
+  onRemove,
+  onRevert,
   onDuplicate,
   onUp,
   onDown,
 }: {
   label: string;
   busy: boolean;
+  /** Already proposed for deletion: the only thing left to offer is undo. */
+  removed: boolean;
+  /** Has something to put back — reworded, restyled, or both. */
+  undoable: boolean;
+  onRemove: () => void;
+  /** Drops every op on this block, which is also how a deletion is undone. */
+  onRevert: () => void;
   onDuplicate: () => void;
   /** Undefined at the ends of the section, where there is nothing to swap with. */
   onUp?: () => void;
@@ -201,8 +212,44 @@ function RowTools({
   const short = label.length > 30 ? `${label.slice(0, 30)}…` : label;
   const cls =
     "rounded px-1 text-[10px] leading-5 text-[var(--color-ink-faint)] transition-colors hover:text-[var(--color-ink)] disabled:opacity-30";
+
+  // A block on its way out keeps only its undo. Reordering or duplicating
+  // something already deleted is a question with no sensible answer.
+  if (removed) {
+    return (
+      <div className="flex shrink-0 items-center opacity-100">
+        <button
+          type="button"
+          onClick={onRevert}
+          title={`Keep "${short}" after all`}
+          aria-label={`Restore "${short}"`}
+          className={`${cls} text-[var(--color-removed)] hover:text-[var(--color-ink)]`}
+        >
+          ↺
+        </button>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex shrink-0 items-center opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+    <div
+      // Stays visible on a block that has been changed: the control that undoes
+      // it should not be something you have to know is there.
+      className={`flex shrink-0 items-center transition-opacity focus-within:opacity-100 group-hover:opacity-100 ${
+        undoable ? "opacity-100" : "opacity-0"
+      }`}
+    >
+      {undoable ? (
+        <button
+          type="button"
+          onClick={onRevert}
+          title={`Put "${short}" back as the page has it`}
+          aria-label={`Revert "${short}"`}
+          className={`${cls} text-[var(--color-changed)] hover:text-[var(--color-ink)]`}
+        >
+          ↺
+        </button>
+      ) : null}
       <button
         type="button"
         onClick={onUp}
@@ -233,6 +280,15 @@ function RowTools({
       >
         {busy ? "…" : "⧉"}
       </button>
+      <button
+        type="button"
+        onClick={onRemove}
+        title={`Propose deleting "${short}"`}
+        aria-label={`Delete "${short}"`}
+        className={`${cls} hover:text-[var(--color-removed)]`}
+      >
+        ✕
+      </button>
     </div>
   );
 }
@@ -259,6 +315,8 @@ export function OutlinePane({
   onAddSection,
   onDuplicate,
   onMove,
+  onRemove,
+  onRevertBlock,
   duplicatingId,
   readOnly,
   structuralCount,
@@ -277,6 +335,10 @@ export function OutlinePane({
   onDuplicate: (blockId: string, scope: "block" | "section") => void;
   /** Reorder by naming the block to swap with, never an index. */
   onMove: (id: string, swapWith: string, pos: "before" | "after") => void;
+  /** Propose deleting a block, or take back one this version added. */
+  onRemove: (id: string) => void;
+  /** Drop every op on one block: undoes a reword, a restyle or a deletion. */
+  onRevertBlock: (id: string) => void;
   /** The duplicate in flight, if any — it waits on the preview frame. */
   duplicatingId: string | null;
   readOnly: boolean;
@@ -483,7 +545,10 @@ export function OutlinePane({
     // Counts cover the subtree: a collapsed parent must still show that
     // something changed inside one of its subsections.
     const all = sectionBlocks(section);
-    const changedHere = all.filter((d) => d.changed).length;
+    // Everything this version does to the section, not only rewording: a
+    // recoloured button and a deleted paragraph are changes a reviewer has to
+    // be shown, and counting only text edits hid both.
+    const changedHere = all.filter((d) => d.changed || d.restyled || d.removed).length;
     /*
      * Insertions count as something to undo, even though they are not edits.
      *
@@ -596,7 +661,13 @@ export function OutlinePane({
                   <span className="mt-px w-4 shrink-0 font-mono text-[10px] text-[var(--color-ink-faint)]">
                     {ROLE_LABEL[derived.block.role] ?? "·"}
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-xs">
+                  <span
+                    className={`min-w-0 flex-1 truncate text-xs ${
+                      derived.removed
+                        ? "text-[var(--color-ink-faint)] line-through decoration-[var(--color-removed)]"
+                        : ""
+                    }`}
+                  >
                     {derived.text || (
                       <span className="italic text-[var(--color-ink-faint)]">
                         {derived.block.role === "image" ? "Image" : "—"}
@@ -619,14 +690,26 @@ export function OutlinePane({
                       💬{commentCounts[derived.block.id] > 1 ? commentCounts[derived.block.id] : ""}
                     </span>
                   ) : null}
-                  {derived.changed ? (
-                    <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-changed)]" />
+                  {derived.removed ? (
+                    <span
+                      title="This version proposes deleting it"
+                      className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-removed)]"
+                    />
+                  ) : derived.changed || derived.restyled ? (
+                    <span
+                      title={derived.changed ? "Reworded" : "Restyled — the wording is unchanged"}
+                      className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--color-changed)]"
+                    />
                   ) : null}
                 </button>
                 {readOnly ? null : (
                   <RowTools
                     label={derived.text || "this block"}
                     busy={duplicatingId === derived.block.id}
+                    removed={derived.removed ?? false}
+                    undoable={Boolean(derived.changed || derived.restyled)}
+                    onRemove={() => onRemove(derived.block.id)}
+                    onRevert={() => onRevertBlock(derived.block.id)}
                     onDuplicate={() => onDuplicate(derived.block.id, "block")}
                     onUp={
                       rowIndex > 0

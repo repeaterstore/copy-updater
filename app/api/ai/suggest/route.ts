@@ -21,6 +21,20 @@ import { readDataFile } from "@/lib/storage";
 
 export const dynamic = "force-dynamic";
 
+/**
+ * How long a suggestion may take before it is called a failure.
+ *
+ * Nothing else bounded this. The only signal reaching the provider was the
+ * reviewer's own Stop, so a stalled upstream left the request open with the
+ * button stuck on "Stop" and no options, no error and no end — the failure
+ * mode that looks exactly like the tool being broken.
+ *
+ * Four minutes is deliberately generous: a layout request at high reasoning
+ * across four models legitimately runs to a couple of minutes, and cutting a
+ * real answer short is worse than waiting. What matters is that it ends.
+ */
+const REQUEST_DEADLINE_MS = 4 * 60_000;
+
 export interface SuggestRequest {
   versionId: string;
   model: string;
@@ -222,6 +236,11 @@ export async function POST(request: Request) {
        */
       const streamed: SuggestOption[] = [];
 
+      // Composed rather than either alone: Stop must still be instant, and a
+      // provider that never answers must still end.
+      const deadline = AbortSignal.timeout(REQUEST_DEADLINE_MS);
+      const signal = AbortSignal.any([request.signal, deadline]);
+
       try {
         const { modelId } = await generateSuggestions({
           modelId: input.model,
@@ -247,7 +266,7 @@ export async function POST(request: Request) {
           sectionHtml,
           screenshot,
           referenceImage,
-          abortSignal: request.signal,
+          abortSignal: signal,
           // The point of the stream: an option goes out the moment it is
           // complete, rather than when its siblings and the other models are.
           onOption: (model, option) => {
@@ -291,7 +310,10 @@ export async function POST(request: Request) {
         // A cancelled request has no result worth recording and nobody left to
         // read an error — the reviewer already knows, they pressed Stop.
         if (!request.signal.aborted) {
-          const message = describeAiError(error);
+          const message = deadline.aborted
+            ? "The request ran past four minutes with no answer and was stopped. " +
+              "The provider may be stalling — try again, or pick a different model."
+            : describeAiError(error);
           await db.insert(schema.aiRuns).values({
             versionId: input.versionId,
             model: input.model,

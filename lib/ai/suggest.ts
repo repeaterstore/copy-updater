@@ -12,6 +12,7 @@ import { sanitizeCss, sanitizeHtml } from "@/lib/ops/sanitize";
 import { OP_SCHEMA_BY_TYPE } from "@/lib/ops/schema";
 import type { Block, Op } from "@/lib/ops/types";
 import { buildModel, isParameterRoutingError, structuredOutputCulprit } from "./openrouter";
+import { INSIST_ON_OBJECT, salvageObject } from "./prose";
 import {
   buildSystemPrompt,
   buildUserPrompt,
@@ -335,7 +336,7 @@ export async function generateSuggestions(
      * failure therefore records the provider that refused, and each subsequent
      * attempt excludes everything recorded so far.
      */
-    const attempts: { temperature?: number }[] = [
+    const attempts: { temperature?: number; insist?: boolean }[] = [
       { temperature },
       {},
       {},
@@ -348,10 +349,13 @@ export async function generateSuggestions(
         result = await generateObject({
           model: await buildCurrentModel(modelId),
           schema: z.object({ options: z.array(schema) }),
-          system,
+          system: attempt.insist ? `${system}\n\n${INSIST_ON_OBJECT}` : system,
           messages: buildMessages(prompt, input.screenshot, input.referenceImage),
           maxOutputTokens: outputCeilingFor(input.optionCount),
           abortSignal: input.abortSignal,
+          // Asked again after it wrote an essay, at the least chatty setting
+          // the routing will accept.
+          ...(attempt.insist ? { temperature: 0 } : {}),
           ...(attempt.temperature !== undefined ? { temperature: attempt.temperature } : {}),
         });
         break;
@@ -360,6 +364,32 @@ export async function generateSuggestions(
         // A cancelled request is not a routing problem; stop rather than
         // burning the remaining attempts on a reviewer who has walked away.
         if (input.abortSignal?.aborted) throw error;
+
+        /*
+         * The model answered in prose.
+         *
+         * Two different failures wear this one error. Some models wrap a
+         * perfectly good object in commentary — "Here are three options:" and
+         * then the JSON — which is recoverable without asking again. Others
+         * ignore the schema outright and invent their own notation, writing
+         * `setText body/div:2/…` in a fenced block as though the reader were a
+         * person. Nothing can be salvaged from that, but asking once more, told
+         * plainly to return the object and nothing else, usually works: the
+         * model had the answer, it just wrote it down in the wrong form.
+         */
+        if (NoObjectGeneratedError.isInstance(error)) {
+          const salvaged = salvageObject(error.text);
+          if (salvaged) {
+            result = { object: salvaged } as typeof result;
+            break;
+          }
+          if (index < attempts.length - 1) {
+            attempts[index + 1] = { ...attempts[index + 1], insist: true };
+            continue;
+          }
+          throw error;
+        }
+
         if (!isParameterRoutingError(error)) throw error;
 
         // Record on every failure, not just the last — otherwise the exclusion
@@ -586,7 +616,10 @@ export function describeAiError(error: unknown): string {
     const said = error.text?.trim();
     if (said) {
       const excerpt = said.length > 240 ? `${said.slice(0, 240)}…` : said;
-      return `The model answered in prose instead of changes. It said: ${excerpt}`;
+      return (
+        "The model answered in prose instead of changes, twice — once when " +
+        `asked plainly to return the object alone. It said: ${excerpt}`
+      );
     }
 
     return "The model returned nothing at all. Try again, or pick a different model.";

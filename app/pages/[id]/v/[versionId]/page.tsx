@@ -29,11 +29,11 @@ export default async function VersionWorkspace({
   searchParams,
 }: {
   params: Promise<{ id: string; versionId: string }>;
-  searchParams: Promise<{ compare?: string }>;
+  searchParams: Promise<{ compare?: string; block?: string }>;
 }) {
   const user = await requireUser();
   const { id: pageId, versionId } = await params;
-  const { compare } = await searchParams;
+  const { compare, block } = await searchParams;
 
   const page = await db.query.pages.findFirst({ where: eq(schema.pages.id, pageId) });
   const version = await db.query.versions.findFirst({
@@ -126,6 +126,7 @@ export default async function VersionWorkspace({
       <Workspace
         pageId={pageId}
         pageUrl={page.url}
+        initialBlockId={block ?? null}
         snapshotId={snapshot.id}
         runtimeVersion={await browserScriptHash("preview")}
         version={current}

@@ -23,6 +23,24 @@ export interface DerivedBlock {
   growth: number | null;
   layoutRisk: boolean;
   /**
+   * Proposed for removal by this version.
+   *
+   * Kept in the list rather than filtered out of it. A block that simply
+   * vanishes from the outline gives a reviewer nothing to point at: no way to
+   * see what the version proposes deleting, and no way to change their mind
+   * short of reverting the whole section.
+   */
+  removed?: boolean;
+  /**
+   * Changed in appearance but not in wording: a class or attribute was set.
+   *
+   * `changed` is a text diff, so an op that recolours a button or hides it on
+   * mobile moves nothing it can see. The block then read as untouched — no dot
+   * in the outline, no badge on the page — and a reviewer could approve a
+   * version without ever being shown the change it makes.
+   */
+  restyled?: boolean;
+  /**
    * For an inserted block, the block it was inserted next to.
    *
    * An inserted id is `new:<nanoid>` with no structural path, so nothing about
@@ -96,9 +114,11 @@ function sameMarkup(a: string, b: string): boolean {
 export function deriveBlocks(baseline: Block[], ops: Op[]): DerivedBlock[] {
   const overrides = textOverrides(ops);
   const removed = new Set(ops.filter((o) => o.t === "remove").map((o) => o.id));
+  const restyled = new Set(
+    ops.filter((o) => o.t === "setAttr").map((o) => (o as { id: string }).id),
+  );
 
   const kept = baseline
-    .filter((block) => !removed.has(block.id))
     .map((block) => {
       const html = overrides.get(block.id) ?? block.html;
       const text = overrides.has(block.id) ? htmlToText(html) : block.text;
@@ -113,6 +133,8 @@ export function deriveBlocks(baseline: Block[], ops: Op[]): DerivedBlock[] {
         words: changed ? toWordParts(block.text, text) : null,
         growth,
         layoutRisk: changed && growth !== null && growth >= LAYOUT_RISK_RATIO,
+        removed: removed.has(block.id),
+        restyled: restyled.has(block.id),
       };
     });
 
@@ -252,22 +274,37 @@ export function insertedId(op: Op): string | null {
  * Ids for the preview's diff colouring, taken straight from the ops.
  *
  * No resolution needed: the preview applies the same op list, so an inserted
- * element is already in its DOM under the id baked into the op. Removals are
- * deliberately absent — the element is gone from the page, so there is nothing
- * left to paint. They show as a strikethrough row in the outline instead.
+ * element is already in its DOM under the id baked into the op.
+ *
+ * Removals are here too, and they are the reason the preview holds `remove`
+ * ops back while the diff is on: an element that has actually been deleted has
+ * nothing left to point at, so "what is this version taking off the page?"
+ * could only be answered by reading a list. Left in place and struck through,
+ * the answer is on the page, and it can be clicked to put back.
  */
-export function structuralHighlights(ops: Op[]): { added: string[]; moved: string[] } {
+export function structuralHighlights(ops: Op[]): {
+  added: string[];
+  moved: string[];
+  removed: string[];
+  restyled: string[];
+} {
   const added: string[] = [];
   const moved: string[] = [];
+  const removed: string[] = [];
+  const restyled: string[] = [];
   for (const op of ops) {
     if (op.t === "insert") {
       const id = insertedId(op);
       if (id) added.push(id);
     } else if (op.t === "move") {
       moved.push(op.id);
+    } else if (op.t === "remove") {
+      removed.push(op.id);
+    } else if (op.t === "setAttr") {
+      restyled.push(op.id);
     }
   }
-  return { added, moved };
+  return { added, moved, removed, restyled };
 }
 
 export type ChromeKind = "nav" | "footer";
@@ -677,7 +714,9 @@ export function sectionScopeFor(
   // Subsections included. The outline counts a section's whole subtree and the
   // heading names all of it, so scoping to the parent's own paragraphs and
   // silently dropping its children rewrote a fraction of what was asked for.
-  const all = sectionBlocks(found);
+  // Blocks this version proposes deleting are not copy to rewrite. Sending
+  // them would have the model politely improve wording that is on its way out.
+  const all = sectionBlocks(found).filter((d) => !d.removed);
   const visible = all.filter((d) => isVisible(d.block));
   const usable = visible.length > 0 ? visible : all;
 

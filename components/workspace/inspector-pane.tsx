@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import type { PageMeta } from "@/lib/ops/types";
 import type { DerivedBlock } from "@/lib/workspace/derive";
+import { RichText } from "./rich-text";
 import { WordDiff } from "./word-diff";
 
 /** Google truncates around these lengths; shown as guidance, never enforced. */
@@ -40,6 +41,7 @@ export function InspectorPane({
   onChangeBlock,
   onChangeMeta,
   onRevertBlock,
+  onSplit,
   onSetVisibility,
   visibility,
   altText,
@@ -55,6 +57,8 @@ export function InspectorPane({
   meta: PageMeta;
   metaBaseline: PageMeta;
   onChangeBlock: (id: string, html: string) => void;
+  /** Enter mid-block: the tail becomes a new sibling block. */
+  onSplit?: (id: string, before: string, after: string) => void;
   /** Restrict a block to one device, or put it back on both. */
   onSetVisibility: (id: string, mode: Visibility) => void;
   /**
@@ -97,6 +101,7 @@ export function InspectorPane({
       derived={selected}
       onChange={onChangeBlock}
       onRevert={onRevertBlock}
+      onSplit={onSplit}
       onSetVisibility={onSetVisibility}
       visibility={visibility}
       altText={altText}
@@ -135,6 +140,7 @@ function BlockEditor({
   derived,
   onChange,
   onRevert,
+  onSplit,
   onSetVisibility,
   visibility,
   altText,
@@ -149,6 +155,7 @@ function BlockEditor({
   derived: DerivedBlock;
   onChange: (id: string, html: string) => void;
   onRevert: (id: string) => void;
+  onSplit?: (id: string, before: string, after: string) => void;
   onSetVisibility: (id: string, mode: Visibility) => void;
   visibility: Visibility;
   /** Read from the op list, for the same reason `visibility` is. */
@@ -330,30 +337,52 @@ function BlockEditor({
             </p>
             <div className="flex items-center gap-2">
               <CharCount value={derived.text.length} />
-              {hasMarkup ? (
-                <button
-                  type="button"
-                  onClick={() => setShowHtml((v) => !v)}
-                  className="text-[11px] text-[var(--color-ink-soft)] hover:text-[var(--color-ink)]"
-                  title="This block contains links or emphasis — edit the markup directly"
-                >
-                  {showHtml ? "Hide HTML" : "Edit HTML"}
-                </button>
-              ) : null}
+              {/* Always offered, not only where markup already exists. A block
+                  of plain text is exactly the one you might want to put a link
+                  or a line break into by hand, and hiding the toggle there left
+                  no way to do it at all. */}
+              <button
+                type="button"
+                onClick={() => setShowHtml((v) => !v)}
+                className="text-[11px] text-[var(--color-ink-soft)] hover:text-[var(--color-ink)]"
+                title={
+                  hasMarkup
+                    ? "This block contains links or emphasis — edit the markup directly"
+                    : "Edit the markup directly"
+                }
+              >
+                {showHtml ? "Hide HTML" : "Edit HTML"}
+              </button>
             </div>
           </div>
 
-          <textarea
-            className="field min-h-24 resize-y font-sans text-sm"
-            style={showHtml ? { fontFamily: "var(--font-mono)", fontSize: "0.75rem" } : undefined}
-            value={draft}
-            readOnly={readOnly}
-            onPaste={onPaste}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              onChange(derived.block.id, e.target.value);
-            }}
-          />
+          {/* The markup view stays a plain field: it is markup, and a rich
+              editor would render the tags someone opened it to read. */}
+          {showHtml ? (
+            <textarea
+              className="field min-h-24 resize-y"
+              style={{ fontFamily: "var(--font-mono)", fontSize: "0.75rem" }}
+              value={draft}
+              readOnly={readOnly}
+              onPaste={onPaste}
+              onChange={(e) => {
+                setDraft(e.target.value);
+                onChange(derived.block.id, e.target.value);
+              }}
+            />
+          ) : (
+            <RichText
+              value={draft}
+              readOnly={readOnly}
+              className="text-sm"
+              onPaste={onPaste}
+              onChange={(html) => {
+                setDraft(html);
+                onChange(derived.block.id, html);
+              }}
+              onSplit={(before, after) => onSplit?.(derived.block.id, before, after)}
+            />
+          )}
 
           {!readOnly ? (
             <p className="mt-1 text-[10px] text-[var(--color-ink-faint)]">
@@ -367,13 +396,14 @@ function BlockEditor({
             </p>
           ) : null}
 
-          {derived.changed && !readOnly ? (
+          {(derived.changed || derived.restyled || derived.removed) && !readOnly ? (
             <button
               type="button"
               onClick={() => onRevert(derived.block.id)}
+              title="Put this block back exactly as the page has it — wording, styling and all"
               className="mt-1.5 text-[11px] text-[var(--color-ink-soft)] hover:text-[var(--color-ink)]"
             >
-              Revert to original
+              {derived.changed ? "Revert to original" : "Revert styling to original"}
             </button>
           ) : null}
         </section>

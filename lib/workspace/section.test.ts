@@ -471,3 +471,40 @@ test("an added section is one row per element, and typing edits only that elemen
     parserWindow.close();
   }
 });
+
+test("a restyled block counts as a change even though its wording is untouched", () => {
+  const page = `<!doctype html><html><body><main>
+    <section><h2>Offer</h2><a class="btn" href="/buy">Get My DAS Plan</a></section>
+  </main></body></html>`;
+  const blocks = withBoxes(blocksOf(page), () => true);
+  const button = blocks.find((b) => b.text === "Get My DAS Plan")!;
+
+  // Recolouring a button, or restricting it to one device, is a setAttr: the
+  // copy is identical, so a text diff sees nothing at all.
+  const ops: Op[] = [{ t: "setAttr", id: button.id, name: "class", value: "btn btn--red" }];
+  const derived = deriveBlocks(blocks, ops);
+  const row = derived.find((d) => d.block.id === button.id)!;
+
+  assert.equal(row.changed, false, "the wording really is unchanged");
+  assert.equal(row.restyled, true, "but the block is not untouched");
+
+  const highlights = structuralHighlights(ops);
+  assert.deepEqual(highlights.restyled, [button.id], "and the page says so too");
+});
+
+test("a removed block stays listed so it can be seen and put back", () => {
+  const page = `<!doctype html><html><body><main>
+    <section><h2>Offer</h2><p>Old promise we no longer make.</p></section>
+  </main></body></html>`;
+  const blocks = withBoxes(blocksOf(page), () => true);
+  const doomed = blocks.find((b) => b.text === "Old promise we no longer make.")!;
+
+  const derived = deriveBlocks(blocks, [{ t: "remove", id: doomed.id }]);
+  const row = derived.find((d) => d.block.id === doomed.id);
+  assert.ok(row, "still in the outline rather than silently gone");
+  assert.equal(row.removed, true);
+
+  // And it is not offered to the model as copy to rewrite.
+  const scope = sectionScopeFor(derived, blocks[0].id);
+  assert.ok(!scope?.blockIds.includes(doomed.id), "kept out of AI scope");
+});

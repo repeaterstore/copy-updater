@@ -24,6 +24,14 @@ export function AppHeader({
         <div className="min-w-0 flex-1">{children}</div>
 
         <Link
+          href="/design"
+          title="Comments tagged @design, across every page"
+          className="shrink-0 text-xs text-[var(--color-ink-soft)] hover:text-[var(--color-ink)]"
+        >
+          Design
+        </Link>
+
+        <Link
           href="/settings"
           className="shrink-0 text-xs text-[var(--color-ink-soft)] hover:text-[var(--color-ink)]"
         >

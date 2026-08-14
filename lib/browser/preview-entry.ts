@@ -40,6 +40,19 @@ const DIFF_STYLES = `
 [${DIFF_ATTR}="added"]::after { background: #10893e; }
 [${DIFF_ATTR}="moved"]   { outline: 2px dashed #7b52d3; outline-offset: 2px; }
 [${DIFF_ATTR}="moved"]::after { background: #7b52d3; }
+/* Struck through rather than gone: while the diff is on, a deletion is a
+   proposal to look at, and clicking it is how it gets taken back. */
+[${DIFF_ATTR}="removed"] {
+  outline: 2px solid #c2410c; outline-offset: 2px;
+  background: rgba(194,65,12,.10);
+  text-decoration: line-through !important;
+  text-decoration-color: #c2410c !important;
+  text-decoration-thickness: 2px !important;
+  opacity: .65;
+}
+[${DIFF_ATTR}="removed"]::after { background: #c2410c; }
+[${DIFF_ATTR}="restyled"] { outline: 2px dotted #7b52d3; outline-offset: 2px; }
+[${DIFF_ATTR}="restyled"]::after { content: "restyled"; background: #7b52d3; }
 [${DIFF_ATTR}="risk"]    { outline: 2px dotted #d08700; outline-offset: 2px; }
 [${DIFF_ATTR}="risk"]::after { content: "check layout"; background: #a16207; }
 
@@ -123,9 +136,13 @@ function paintDiff(): void {
   // and a growth warning should not mask an actual edit.
   const layers: [string, string[]][] = [
     ["risk", highlights.layoutRisk],
+    ["restyled", highlights.restyled ?? []],
     ["moved", highlights.moved],
     ["added", highlights.added],
     ["changed", highlights.changed],
+    // Last, so a block both reworded and deleted reads as deleted: the deletion
+    // is the part that decides what happens to the words.
+    ["removed", highlights.removed],
   ];
   for (const [kind, ids] of layers) {
     for (const id of ids) byId(id)?.setAttribute(DIFF_ATTR, kind);
@@ -311,6 +328,72 @@ function restoreCaret(saved: { id: string; offset: number }): void {
 }
 
 const pendingEdits = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * Enter splits the block; shift+Enter breaks the line.
+ *
+ * Both are what a writer means by those keys, and neither is what the browser
+ * does unaided. Inside a contenteditable `<p>`, Enter inserts a `<div>` (or a
+ * `<br>`, depending on the browser and where the caret is) — so a paragraph
+ * ends up containing paragraphs, the block stops being a leaf, and the mess is
+ * saved as the block's own markup.
+ *
+ * The split happens here because this is where the caret is: everything before
+ * it stays, everything after it becomes a sibling of the same tag wearing the
+ * same classes. The host turns that into a setText and an insert, which is what
+ * a paragraph break has always been in this tool's terms.
+ */
+function watchKeys(): void {
+  document.addEventListener("keydown", (event) => {
+    if (!editable || event.key !== "Enter" || event.isComposing) return;
+
+    const selection = document.getSelection();
+    if (!selection || selection.rangeCount === 0) return;
+    const range = selection.getRangeAt(0);
+
+    const el = (range.startContainer.nodeType === 1
+      ? (range.startContainer as Element)
+      : range.startContainer.parentElement
+    )?.closest(`[${ID_ATTR}]`);
+    if (!el || !isLeafTextBlock(el)) return;
+
+    event.preventDefault();
+
+    // A line break inside the paragraph, which is legitimate inline markup and
+    // the reason shift+Enter exists.
+    if (event.shiftKey) {
+      range.deleteContents();
+      const br = document.createElement("br");
+      range.insertNode(br);
+      range.setStartAfter(br);
+      range.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(range);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      return;
+    }
+
+    const id = el.getAttribute(ID_ATTR);
+    if (!id) return;
+
+    // Everything from the caret to the end of the block moves out of it.
+    const tail = range.cloneRange();
+    tail.selectNodeContents(el);
+    tail.setStart(range.endContainer, range.endOffset);
+    const moved = tail.extractContents();
+
+    const sibling = el.cloneNode(false) as Element;
+    sibling.appendChild(moved);
+
+    post({
+      channel: PREVIEW_CHANNEL,
+      type: "blockSplit",
+      id,
+      before: sanitizeHtml(document, el.innerHTML),
+      after: cleanMarkup(sibling),
+    });
+  });
+}
 
 function watchEdits(): void {
   document.addEventListener("input", (event) => {
@@ -547,6 +630,7 @@ function start(): void {
   capturePristine();
   injectStyles();
   watchEdits();
+  watchKeys();
   watchClicks();
 
   window.addEventListener("message", (event: MessageEvent) => {

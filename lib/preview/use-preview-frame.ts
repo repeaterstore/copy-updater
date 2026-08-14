@@ -38,6 +38,8 @@ export interface PreviewFrameApi {
 export interface PreviewFrameHandlers {
   onBlockClicked?: (id: string) => void;
   onBlockEdited?: (id: string, html: string) => void;
+  /** Enter was pressed mid-block: it becomes two. See the protocol. */
+  onBlockSplit?: (id: string, before: string, after: string) => void;
   onApplyFailures?: (failures: { id: string; reason: string }[]) => void;
 }
 
@@ -119,6 +121,9 @@ export function usePreviewFrame(handlers: PreviewFrameHandlers): PreviewFrameApi
           break;
         case "blockEdited":
           handlersRef.current.onBlockEdited?.(message.id, message.html);
+          break;
+        case "blockSplit":
+          handlersRef.current.onBlockSplit?.(message.id, message.before, message.after);
           break;
         case "applied":
           if (message.failures.length) {

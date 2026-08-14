@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { useEffect, useRef, useState, useTransition } from "react";
 import { recordChosenOptionAction } from "@/app/actions/ai";
 import type { AiMode } from "@/db/schema";
 import type { Op } from "@/lib/ops/types";
@@ -69,6 +69,23 @@ export function AiPanel({
   const [runId, setRunId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
+
+  /**
+   * Seconds since the request went out.
+   *
+   * A suggestion can legitimately run for two minutes, and for those two
+   * minutes the panel said "Thinking…" and nothing else — indistinguishable
+   * from a request that had died. The server gives up at four minutes; this is
+   * what shows the wait is real until then.
+   */
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    if (!pending) return;
+    setElapsed(0);
+    const started = Date.now();
+    const timer = setInterval(() => setElapsed(Math.round((Date.now() - started) / 1000)), 1000);
+    return () => clearInterval(timer);
+  }, [pending]);
 
   /**
    * A picture of the section someone wants, held for this request only.
@@ -615,7 +632,11 @@ export function AiPanel({
 
           {pending ? (
             <p className="text-[11px] text-[var(--color-ink-faint)]">
-              {options.length > 0 ? "Still writing…" : "Thinking…"}
+              {options.length > 0 ? "Still writing…" : "Thinking…"} {elapsed}s
+              {/* A minute of silence and a stalled request look identical
+                  without this. Layout work at high reasoning really does take
+                  this long; the count is what says so. */}
+              {elapsed > 90 ? " — long, but still going" : ""}
             </p>
           ) : null}
         </div>

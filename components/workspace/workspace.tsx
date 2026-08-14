@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { Block, Op, PageMeta } from "@/lib/ops/types";
-import { assignNewIds } from "@/lib/ops/ids";
+import { assignNewIds, isNewId } from "@/lib/ops/ids";
 import { sanitizeHtml } from "@/lib/ops/sanitize";
 import { usePreviewFrame } from "@/lib/preview/use-preview-frame";
 import {
@@ -88,6 +88,7 @@ function classesNow(ops: Op[], block: Block): string[] {
 export function Workspace({
   pageId,
   pageUrl,
+  initialBlockId,
   snapshotId,
   runtimeVersion,
   version,
@@ -103,6 +104,11 @@ export function Workspace({
   pageId: string;
   /** The captured page's address, for the search-result preview. */
   pageUrl: string;
+  /**
+   * Selected on open, from `?block=` — how a design note links to the thing it
+   * is about. Without it the designer is handed a page and told to find it.
+   */
+  initialBlockId: string | null;
   snapshotId: string;
   runtimeVersion: string;
   version: WorkspaceVersion;
@@ -121,7 +127,7 @@ export function Workspace({
   const router = useRouter();
   const [ops, setOps] = useState<Op[]>(initialOps);
   const [savedOps, setSavedOps] = useState<Op[]>(initialOps);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialBlockId);
   const [device, setDevice] = useState<Device>("desktop");
   const [diffMode, setDiffMode] = useState(true);
   const [editMode, setEditMode] = useState(true);
@@ -189,6 +195,7 @@ export function Workspace({
       setPane("inspector");
     },
     onBlockEdited: (id, html) => upsertText(id, html),
+    onBlockSplit: (id, before, after) => splitBlock(id, before, after),
     onApplyFailures: (failures) =>
       setProblems(failures.map((f) => `${f.id || "(unknown)"}: ${f.reason}`)),
   });
@@ -208,6 +215,7 @@ export function Workspace({
       setPane("inspector");
     },
     onBlockEdited: (id, html) => upsertText(id, html),
+    onBlockSplit: (id, before, after) => splitBlock(id, before, after),
     onApplyFailures: (failures) =>
       setProblems(failures.map((f) => `${f.id || "(unknown)"}: ${f.reason}`)),
   });
@@ -286,7 +294,18 @@ export function Workspace({
   useEffect(() => {
     // Holding "Before" should feel like a light switch, so it skips the debounce
     // that exists to stop every keystroke replaying the list.
-    const list = showingBefore ? baselineOps : ops;
+    /*
+     * With the diff on, deletions are shown rather than performed.
+     *
+     * A `remove` op applied for real takes the element out of the page, and
+     * then there is nothing to see and nothing to click: the only record of
+     * what a version deletes would be a list somewhere else. Held back, the
+     * copy stays where it is, painted as removed, and clicking it offers to put
+     * it back. Turning the diff off applies them and shows the page as it would
+     * actually ship.
+     */
+    const source = showingBefore ? baselineOps : ops;
+    const list = diffMode ? source.filter((op) => op.t !== "remove") : source;
     const delay = showingBefore ? 0 : 180;
     if (applyTimer.current) clearTimeout(applyTimer.current);
     applyTimer.current = setTimeout(() => {
@@ -297,7 +316,7 @@ export function Workspace({
       if (applyTimer.current) clearTimeout(applyTimer.current);
     };
   }, [
-    ops, baselineOps, showingBefore, frame, frame.ready,
+    ops, baselineOps, showingBefore, diffMode, frame, frame.ready,
     companion, companion.ready, showCompanion,
   ]);
 
@@ -330,13 +349,16 @@ export function Workspace({
     // Straight from the ops. The preview has already applied them, so an
     // inserted element is in its DOM waiting to be marked — these were empty
     // arrays, which is why layout mode's work arrived unannounced.
-    const { added, moved } = structuralHighlights(ops);
+    const { added, moved, removed, restyled } = structuralHighlights(ops);
     const highlights = {
       changed,
       added,
-      // Nothing to paint: a removed element is no longer in the page.
-      removed: [],
+      // There is something to paint after all: while the diff is on, the frame
+      // holds `remove` ops back so the copy on its way out is still on the page
+      // to be seen, struck through, and clicked to restore.
+      removed,
       moved,
+      restyled,
       layoutRisk: risk,
       comments: commentCounts,
     };
@@ -370,9 +392,96 @@ export function Workspace({
     [baselineBlocks],
   );
 
+  /**
+   * Put a block back exactly as the page had it.
+   *
+   * Every op that targets it, not only the rewording. Dropping `setText` alone
+   * left a block that had been recoloured, restricted to one device or deleted
+   * still carrying those ops, with a Revert button that appeared to do nothing
+   * — and for a block that was only ever restyled, no button at all, since
+   * "changed" is a text diff and a class change moves no words.
+   *
+   * Ops that merely *mention* the block are left alone: an insert or a move
+   * anchored to it is a statement about something else, and undoing this block
+   * should not silently take that with it.
+   */
+  /**
+   * A paragraph break, as the two ops that describe it.
+   *
+   * Written in one update rather than an edit followed by an insert: they are
+   * one action to whoever pressed the key, and splitting them would put a
+   * half-done state through autosave and the undo journal in between.
+   */
+  const splitBlock = useCallback(
+    (id: string, before: string, after: string) => {
+      const html = assignNewIds(document, sanitizeHtml(document, after));
+      setOps((current) => {
+        const withoutText = current.filter((op) => !(op.t === "setText" && op.id === id));
+        return [
+          ...withoutText,
+          { t: "setText", id, html: before },
+          { t: "insert", refId: id, pos: "after", html },
+        ];
+      });
+    },
+    [],
+  );
+
   const revertBlock = useCallback((id: string) => {
-    setOps((current) => current.filter((op) => !(op.t === "setText" && op.id === id)));
+    setOps((current) =>
+      current.filter((op) => !("id" in op && typeof op.id === "string" && op.id === id)),
+    );
   }, []);
+
+  /**
+   * Take a block off the page — or take back one this version added.
+   *
+   * Two different things wearing one word. Deleting copy that the live page
+   * carries is a proposal, recorded as a `remove` op and reviewed like any
+   * other change. Deleting something this version inserted is a retraction:
+   * there is nothing to propose removing, because it was never on the page, so
+   * the insert simply goes, along with everything hanging off it.
+   *
+   * Told apart by the id. An inserted block's id was minted when the op was
+   * created and exists nowhere in the captured snapshot.
+   */
+  const removeBlock = useCallback((id: string) => {
+    setOps((current) => {
+      if (!isNewId(id)) {
+        // Already proposed for removal — asking twice is not a second removal.
+        if (current.some((op) => op.t === "remove" && op.id === id)) return current;
+        return [...current, { t: "remove", id }];
+      }
+
+      /*
+       * Everything the insert brought with it.
+       *
+       * A section template arrives as one op carrying a heading and several
+       * paragraphs, and its rows are derived from that one op's markup — so
+       * removing "the heading" has to mean removing the fragment that contains
+       * it, or the row disappears from the outline while the copy stays on the
+       * page. Ops written against any of those ids go too, or a setText would
+       * outlive the element it edits and fail on every future replay.
+       */
+      const owning = current.find(
+        (op) => op.t === "insert" && op.html.includes(`data-cu-id="${id}"`),
+      );
+      if (!owning) return current.filter((op) => !("id" in op && op.id === id));
+
+      const orphaned = new Set(
+        [...(owning.t === "insert" ? owning.html.matchAll(/data-cu-id="([^"]+)"/g) : [])].map(
+          (m) => m[1],
+        ),
+      );
+      return current.filter((op) => {
+        if (op === owning) return false;
+        if ("id" in op && typeof op.id === "string" && orphaned.has(op.id)) return false;
+        if ("refId" in op && typeof op.refId === "string" && orphaned.has(op.refId)) return false;
+        return true;
+      });
+    });
+  }, []);
+
 
   /**
    * Put a whole section back the way it was.
@@ -853,6 +962,8 @@ export function Workspace({
             onAddSection={addSection}
             onDuplicate={duplicate}
             onMove={moveBlock}
+            onRemove={removeBlock}
+            onRevertBlock={revertBlock}
             duplicatingId={duplicating}
             readOnly={readOnly}
             onSelectSection={(firstBlockId) => {
@@ -971,6 +1082,7 @@ export function Workspace({
             onChangeBlock={upsertText}
             onChangeMeta={changeMeta}
             onRevertBlock={revertBlock}
+            onSplit={splitBlock}
             onSetVisibility={setVisibility}
             visibility={selectedVisibility}
             altText={selectedAlt}

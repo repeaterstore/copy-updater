@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { addCommentAction, resolveCommentAction } from "@/app/actions/versions";
+import { DESIGN_TAG, isForDesigner } from "@/lib/comments/tags";
 
 export interface CommentItem {
   id: string;
@@ -40,6 +41,7 @@ export function CommentPanel({
   const [pending, start] = useTransition();
 
   const scoped = comments.filter((c) => c.blockId === blockId);
+  const forDesigner = isForDesigner(body);
 
   return (
     <section className="border-t border-[var(--color-line)] pt-3">
@@ -67,6 +69,14 @@ export function CommentPanel({
                   >
                     {timeAgo(comment.createdAt)}
                   </span>
+                  {isForDesigner(comment.body) ? (
+                    <span
+                      className="ml-1.5 rounded px-1 py-0.5 text-[9px] font-medium uppercase tracking-wide text-[var(--color-comment)] ring-1 ring-[var(--color-comment)]"
+                      title="Listed for the designer, not for the copy review"
+                    >
+                      design
+                    </span>
+                  ) : null}
                 </span>
                 <button
                   type="button"
@@ -96,6 +106,28 @@ export function CommentPanel({
         value={body}
         onChange={(e) => setBody(e.target.value)}
       />
+
+      {/* The tag is the whole routing mechanism, so it cannot be folklore.
+          Clicking it writes the tag rather than explaining it. */}
+      <div className="mt-1 flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setBody((current) => (isForDesigner(current) ? current : `${DESIGN_TAG} ${current}`.trim()))}
+          title="Address this to the designer — it appears in the design list, not the copy review"
+          className={`chip border ${
+            forDesigner
+              ? "border-transparent bg-[var(--color-comment)] text-white"
+              : "border-[var(--color-line-strong)] text-[var(--color-ink-soft)]"
+          }`}
+        >
+          {DESIGN_TAG}
+        </button>
+        {forDesigner ? (
+          <span className="text-[10px] text-[var(--color-ink-faint)]">
+            Goes to the designer’s list
+          </span>
+        ) : null}
+      </div>
       <button
         type="button"
         className="btn mt-1.5 w-full justify-center"

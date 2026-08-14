@@ -11,8 +11,14 @@ export const PREVIEW_CHANNEL = "copy-updater/preview";
 export interface DiffHighlights {
   changed: string[];
   added: string[];
+  /**
+   * Still on the page while the diff is on, so it can be seen and put back —
+   * the host holds `remove` ops back rather than applying them.
+   */
   removed: string[];
   moved: string[];
+  /** Recoloured, reclassed or hidden on one device: changed without rewording. */
+  restyled: string[];
   /** Blocks whose text grew enough to be worth checking on mobile. */
   layoutRisk: string[];
   /**
@@ -50,6 +56,25 @@ export type FrameMessage =
   | { channel: typeof PREVIEW_CHANNEL; type: "ready" }
   | { channel: typeof PREVIEW_CHANNEL; type: "blockClicked"; id: string }
   | { channel: typeof PREVIEW_CHANNEL; type: "blockEdited"; id: string; html: string }
+  /**
+   * Enter was pressed inside a block: it becomes two.
+   *
+   * A paragraph break is a structural change, not a character. Left to the
+   * browser, Enter inside a contenteditable `<p>` injects a `<div>` or a `<br>`
+   * into it, and that markup is what gets saved — a paragraph containing
+   * paragraphs, which is neither valid nor editable afterwards. The frame does
+   * the split against the real DOM, where the caret is; the host turns it into
+   * the two ops that describe it.
+   */
+  | {
+      channel: typeof PREVIEW_CHANNEL;
+      type: "blockSplit";
+      id: string;
+      /** What stays in the original block. */
+      before: string;
+      /** The new sibling, as complete markup with the tool's attributes stripped. */
+      after: string;
+    }
   | { channel: typeof PREVIEW_CHANNEL; type: "applied"; failures: { id: string; reason: string }[] }
   | { channel: typeof PREVIEW_CHANNEL; type: "measured"; boxes: Record<string, { x: number; y: number; w: number; h: number }> }
   /**
