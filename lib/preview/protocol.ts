@@ -61,7 +61,19 @@ export type FrameMessage =
    * skeleton the server works from has them stripped out, and the snapshot is
    * megabytes of inlined CSS that nothing else needs to parse.
    */
-  | { channel: typeof PREVIEW_CHANNEL; type: "responsive"; recipeId: string | null }
+  | {
+      channel: typeof PREVIEW_CHANNEL;
+      type: "responsive";
+      recipeId: string | null;
+      /**
+       * Classes that hide a run of words on mobile, if the page defines them.
+       *
+       * Reported separately because a site can define `md:block` and not
+       * `md:inline`: the block-level control still works there, wrapping a
+       * selection does not, and the difference is only visible from here.
+       */
+      inlineDesktopOnly: string[] | null;
+    }
   | { channel: typeof PREVIEW_CHANNEL; type: "blockClicked"; id: string }
   | { channel: typeof PREVIEW_CHANNEL; type: "blockEdited"; id: string; html: string }
   /**

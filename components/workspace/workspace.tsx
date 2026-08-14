@@ -81,6 +81,12 @@ const VISIBILITY_CSS =
  * changed: the preview obeyed the op, the buttons denied it existed, and there
  * was no way to tell which device a block was set to.
  */
+/** The class attribute of a fragment's outermost element. */
+function classesOf(html: string): string[] {
+  const match = /^\s*<[a-z][^>]*\sclass="([^"]*)"/i.exec(html);
+  return match ? match[1].split(/\s+/).filter(Boolean) : [];
+}
+
 function classesNow(ops: Op[], block: Block): string[] {
   const last = [...ops]
     .reverse()
@@ -146,6 +152,8 @@ export function Workspace({
    * nothing on the real site.
    */
   const [recipeId, setRecipeId] = useState<string | null>(null);
+  /** Classes for hiding a run of words, when the page has an inline form. */
+  const [inlineDesktopOnly, setInlineDesktopOnly] = useState<string[] | null>(null);
   /**
    * A pending "add a section here", from the outline's "+".
    *
@@ -225,7 +233,10 @@ export function Workspace({
     },
     onBlockEdited: (id, html) => upsertText(id, html),
     onBlockSplit: (id, before, after) => splitBlock(id, before, after),
-    onResponsive: setRecipeId,
+    onResponsive: (id, inlineDesktop) => {
+      setRecipeId(id);
+      setInlineDesktopOnly(inlineDesktop);
+    },
     onApplyFailures: (failures) =>
       setProblems(failures.map((f) => `${f.id || "(unknown)"}: ${f.reason}`)),
   });
@@ -756,11 +767,51 @@ export function Workspace({
    * "show this card on desktop only" applied to one of them hides a line out of
    * the middle of it and leaves the rest on screen looking broken.
    */
+  /**
+   * A whole section on one device, set on the section's own container.
+   *
+   * Setting it on every block was the same change spelled out N times, and it
+   * left the container behind: its padding, its background and its spacing all
+   * still rendered, so hiding a section on mobile left a coloured gap where the
+   * section had been. One class on the wrapper is also the change a developer
+   * would make by hand.
+   *
+   * The container is asked for from the frame, because the workspace holds a
+   * flat list of blocks and a container is not one of them — it has an id, like
+   * every element in a snapshot, but nothing here knows which.
+   */
   const setSectionVisibility = useCallback(
-    (ids: string[], mode: Visibility) => {
-      for (const id of ids) setVisibility(id, mode);
+    async (ids: string[], mode: Visibility) => {
+      const recipe = RECIPES.find((r) => r.id === recipeId);
+      if (!recipe || ids.length === 0) return;
+
+      const container = await frame.readMarkup(ids[0], true);
+      if (!container) {
+        // Fall back to the blocks themselves rather than doing nothing: the
+        // result is less tidy and still correct.
+        for (const id of ids) setVisibility(id, mode);
+        return;
+      }
+
+      setOps((current) => {
+        const existing = [...current]
+          .reverse()
+          .find(
+            (op) => op.t === "setAttr" && op.id === container.anchorId && op.name === "class",
+          );
+        const now =
+          existing && existing.t === "setAttr" && typeof existing.value === "string"
+            ? existing.value.split(/\s+/).filter(Boolean)
+            : classesOf(container.html);
+
+        const next = applyVisibility(now, recipe, mode).join(" ");
+        const rest = current.filter(
+          (op) => !(op.t === "setAttr" && op.id === container.anchorId && op.name === "class"),
+        );
+        return [...rest, { t: "setAttr", id: container.anchorId, name: "class", value: next }];
+      });
     },
-    [setVisibility],
+    [frame, recipeId, setVisibility],
   );
 
   const changeMeta = useCallback(
@@ -1153,6 +1204,12 @@ export function Workspace({
             onSetVisibility={setVisibility}
             visibility={selectedVisibility}
             responsiveLabel={recipe?.label ?? null}
+            inlineVisibility={{
+              desktopOnly: inlineDesktopOnly,
+              // Hiding on desktop needs no inline form: display:none is
+              // display:none whatever the element was.
+              mobileOnly: recipe?.mobileOnly ?? null,
+            }}
             altText={selectedAlt}
             onSetAlt={setAlt}
             sectionBlockIds={section?.blockIds ?? null}

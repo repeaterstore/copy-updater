@@ -23,6 +23,7 @@ export function RichText({
   onChange,
   onSplit,
   onPaste,
+  inlineVisibility,
   className,
 }: {
   value: string;
@@ -31,6 +32,12 @@ export function RichText({
   /** Enter pressed: everything before the caret stays, the rest is a new block. */
   onSplit?: (before: string, after: string) => void;
   onPaste?: (event: React.ClipboardEvent<HTMLDivElement>) => void;
+  /**
+   * Classes this page uses to hide something on one screen size, for wrapping
+   * a run of words rather than a whole block. Absent where the page has no
+   * such convention, or none that works on an inline element.
+   */
+  inlineVisibility?: { desktopOnly: string[] | null; mobileOnly: string[] | null };
   className?: string;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
@@ -61,6 +68,48 @@ export function RichText({
     exec("createLink", url);
   };
 
+
+  /**
+   * Hide part of a sentence, rather than the block it sits in.
+   *
+   * Wrapping is done by hand rather than with execCommand, which has no command
+   * for "put a span with this class around the selection". The selection is
+   * extracted and reinserted inside the span; `surroundContents` would be
+   * tidier and throws whenever the selection starts inside one element and ends
+   * inside another, which is most real selections.
+   *
+   * Clicking again on text already wrapped takes the wrapper off, so the same
+   * button is how it is undone.
+   */
+  const wrapSelection = (classes: string[]) => {
+    const el = ref.current;
+    const selection = window.getSelection();
+    if (!el || !selection || selection.rangeCount === 0) return;
+    const range = selection.getRangeAt(0);
+
+    const node = range.commonAncestorContainer;
+    const start = (node.nodeType === 1 ? (node as Element) : node.parentElement) ?? null;
+    const existing = start?.closest("span[class]");
+    if (existing && el.contains(existing) && classes.every((c) => existing.classList.contains(c))) {
+      // Unwrap: the words stay, the wrapper goes.
+      const parent = existing.parentNode;
+      if (parent) {
+        while (existing.firstChild) parent.insertBefore(existing.firstChild, existing);
+        parent.removeChild(existing);
+      }
+      onChange(el.innerHTML);
+      return;
+    }
+
+    if (range.collapsed) return;
+    const span = document.createElement("span");
+    span.className = classes.join(" ");
+    span.appendChild(range.extractContents());
+    range.insertNode(span);
+    selection.removeAllRanges();
+    onChange(el.innerHTML);
+  };
+
   const button = (label: string, title: string, action: () => void, style?: string) => (
     <button
       type="button"
@@ -85,6 +134,24 @@ export function RichText({
           {button("I", "Italic", () => exec("italic"), "italic")}
           {button("Link", "Add a link", link)}
           {button("Clear", "Remove formatting", () => exec("removeFormat"))}
+
+          {inlineVisibility?.desktopOnly || inlineVisibility?.mobileOnly ? (
+            <span className="mx-0.5 h-3.5 w-px bg-[var(--color-line-strong)]" />
+          ) : null}
+          {inlineVisibility?.desktopOnly
+            ? button(
+                "Desktop",
+                "Hide the selected words on mobile. Click again to undo.",
+                () => wrapSelection(inlineVisibility.desktopOnly!),
+              )
+            : null}
+          {inlineVisibility?.mobileOnly
+            ? button(
+                "Mobile",
+                "Hide the selected words on desktop. Click again to undo.",
+                () => wrapSelection(inlineVisibility.mobileOnly!),
+              )
+            : null}
         </div>
       )}
 

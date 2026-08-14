@@ -45,6 +45,7 @@ export function InspectorPane({
   onSetVisibility,
   visibility,
   responsiveLabel,
+  inlineVisibility,
   altText,
   onSetAlt,
   sectionBlockIds,
@@ -72,6 +73,8 @@ export function InspectorPane({
   visibility: Visibility;
   /** Null when the page defines no responsive convention; the control hides. */
   responsiveLabel: string | null;
+  /** Classes for hiding part of a sentence, if the page can express it. */
+  inlineVisibility?: { desktopOnly: string[] | null; mobileOnly: string[] | null };
   /** The selected image's alt text, resolved from the ops. */
   altText: string;
   onSetAlt: (id: string, value: string) => void;
@@ -108,6 +111,7 @@ export function InspectorPane({
       onSetVisibility={onSetVisibility}
       visibility={visibility}
       responsiveLabel={responsiveLabel}
+      inlineVisibility={inlineVisibility}
       altText={altText}
       onSetAlt={onSetAlt}
       sectionBlockIds={sectionBlockIds}
@@ -148,6 +152,7 @@ function BlockEditor({
   onSetVisibility,
   visibility,
   responsiveLabel,
+  inlineVisibility,
   altText,
   onSetAlt,
   sectionBlockIds,
@@ -169,6 +174,8 @@ function BlockEditor({
    * that writes a class the site does not define does nothing and says nothing.
    */
   responsiveLabel: string | null;
+  /** Classes for hiding part of a sentence, if the page can express it. */
+  inlineVisibility?: { desktopOnly: string[] | null; mobileOnly: string[] | null };
   /** Read from the op list, for the same reason `visibility` is. */
   altText: string;
   onSetAlt: (id: string, value: string) => void;
@@ -394,6 +401,7 @@ function BlockEditor({
               readOnly={readOnly}
               className="text-sm"
               onPaste={onPaste}
+              inlineVisibility={inlineVisibility}
               onChange={(html) => {
                 setDraft(html);
                 onChange(derived.block.id, html);

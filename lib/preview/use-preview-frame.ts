@@ -41,7 +41,7 @@ export interface PreviewFrameHandlers {
   /** Enter was pressed mid-block: it becomes two. See the protocol. */
   onBlockSplit?: (id: string, before: string, after: string) => void;
   /** Which responsive convention the page's own CSS defines, if any. */
-  onResponsive?: (recipeId: string | null) => void;
+  onResponsive?: (recipeId: string | null, inlineDesktopOnly: string[] | null) => void;
   onApplyFailures?: (failures: { id: string; reason: string }[]) => void;
 }
 
@@ -128,7 +128,7 @@ export function usePreviewFrame(handlers: PreviewFrameHandlers): PreviewFrameApi
           handlersRef.current.onBlockSplit?.(message.id, message.before, message.after);
           break;
         case "responsive":
-          handlersRef.current.onResponsive?.(message.recipeId);
+          handlersRef.current.onResponsive?.(message.recipeId, message.inlineDesktopOnly);
           break;
         case "applied":
           if (message.failures.length) {

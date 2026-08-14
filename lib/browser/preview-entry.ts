@@ -10,7 +10,7 @@ import { sanitizeHtml } from "../ops/sanitize";
 import { applyWithUndo, runUndo, type UndoEntry } from "../ops/undo";
 import { ID_ATTR } from "../ops/types";
 import { cleanInnerMarkup, cleanMarkup, enclosingSection } from "../ops/section-scope";
-import { detectRecipe } from "../ops/responsive";
+import { detectRecipe, inlineClassesFor } from "../ops/responsive";
 import {
   PREVIEW_CHANNEL,
   type DiffHighlights,
@@ -702,10 +702,21 @@ function reportResponsive(): void {
       for (const el of Array.from(document.querySelectorAll("[class]"))) {
         for (const name of Array.from(el.classList)) used.add(name);
       }
-      const recipe = detectRecipe(definedClasses(), used);
-      post({ channel: PREVIEW_CHANNEL, type: "responsive", recipeId: recipe?.id ?? null });
+      const defined = definedClasses();
+      const recipe = detectRecipe(defined, used);
+      post({
+        channel: PREVIEW_CHANNEL,
+        type: "responsive",
+        recipeId: recipe?.id ?? null,
+        inlineDesktopOnly: inlineClassesFor(recipe, "desktop", defined),
+      });
     } catch {
-      post({ channel: PREVIEW_CHANNEL, type: "responsive", recipeId: null });
+      post({
+        channel: PREVIEW_CHANNEL,
+        type: "responsive",
+        recipeId: null,
+        inlineDesktopOnly: null,
+      });
     }
   }, 0);
 }

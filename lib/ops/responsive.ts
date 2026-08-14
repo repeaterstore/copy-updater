@@ -23,6 +23,21 @@ export interface ResponsiveRecipe {
   desktopOnly: string[];
   /** Classes that leave a block visible only on narrow screens. */
   mobileOnly: string[];
+  /**
+   * The same, for a run of words inside a sentence.
+   *
+   * Only the desktop-only direction needs its own form, and it needs one
+   * badly: hiding something by default and showing it from a breakpoint up
+   * means naming the display it comes back as, and `md:block` on a span in the
+   * middle of a paragraph puts it on its own line. `md:inline` is the same
+   * rule for something that is part of a sentence.
+   *
+   * Hiding on desktop needs nothing extra — `display: none` is `display: none`
+   * whatever the element was — so the mobile-only classes are reused as they
+   * are. Absent where the framework has no inline form worth trusting, in
+   * which case the control is not offered for a selection.
+   */
+  desktopOnlyInline?: string[];
 }
 
 /**
@@ -31,6 +46,25 @@ export interface ResponsiveRecipe {
  */
 function required(recipe: ResponsiveRecipe): string[] {
   return [...new Set([...recipe.desktopOnly, ...recipe.mobileOnly])];
+}
+
+/**
+ * The classes for wrapping a run of words, if this page can express it.
+ *
+ * Checked separately from the recipe itself: a site can perfectly well define
+ * `md:block` and not `md:inline`, and the block-level control should still work
+ * there. Null means a selection cannot be hidden on this page, only a whole
+ * block.
+ */
+export function inlineClassesFor(
+  recipe: ResponsiveRecipe | null,
+  mode: Exclude<Visibility, "both">,
+  defined: Set<string>,
+): string[] | null {
+  if (!recipe) return null;
+  const classes = mode === "mobile" ? recipe.mobileOnly : recipe.desktopOnlyInline;
+  if (!classes || classes.length === 0) return null;
+  return classes.every((c) => defined.has(c)) ? classes : null;
 }
 
 /**
@@ -48,6 +82,7 @@ const TAILWIND: ResponsiveRecipe[] = TAILWIND_PREFIXES.map((prefix) => ({
   // Hidden by default, shown from the breakpoint up — which is also the
   // mobile-first order Tailwind expects them written in.
   desktopOnly: ["hidden", `${prefix}:block`],
+  desktopOnlyInline: ["hidden", `${prefix}:inline`],
   mobileOnly: [`${prefix}:hidden`],
 }));
 
@@ -56,12 +91,15 @@ const OTHERS: ResponsiveRecipe[] = [
     id: "bootstrap5",
     label: "Bootstrap 5",
     desktopOnly: ["d-none", "d-md-block"],
+    desktopOnlyInline: ["d-none", "d-md-inline"],
     mobileOnly: ["d-md-none"],
   },
   {
     id: "bootstrap3",
     label: "Bootstrap 3/4",
     desktopOnly: ["hidden-xs"],
+    // hidden-xs is display:none on any element, so it needs no inline form.
+    desktopOnlyInline: ["hidden-xs"],
     mobileOnly: ["visible-xs-block"],
   },
   {
@@ -74,12 +112,15 @@ const OTHERS: ResponsiveRecipe[] = [
     id: "bulma",
     label: "Bulma",
     desktopOnly: ["is-hidden-mobile"],
+    // Bulma hides rather than forcing a display, so this is inline-safe.
+    desktopOnlyInline: ["is-hidden-mobile"],
     mobileOnly: ["is-hidden-tablet"],
   },
   {
     id: "shopify-slate",
     label: "Shopify (slate)",
     desktopOnly: ["small--hide"],
+    desktopOnlyInline: ["small--hide"],
     mobileOnly: ["medium-up--hide"],
   },
 ];
