@@ -400,3 +400,74 @@ test("a block inserted before a section's first block joins that section", () =>
   assert.ok(texts.includes("Shipping"), `grouped with its anchor, got ${texts.join(" | ")}`);
   assert.ok(!texts.includes("Two years, parts and labour."), "not the previous section");
 });
+
+test("a page wrapped in one div still splits into bands", () => {
+  // How a React site renders: header, every section and the footer are
+  // siblings under a single application wrapper, so at the top level there is
+  // one container holding the entire page.
+  const sections = Array.from({ length: 24 }, (_, i) =>
+    `<section><h2>Section ${i + 1}</h2><p>Body copy for section ${i + 1}.</p>` +
+    `<p>A second paragraph for section ${i + 1}.</p></section>`,
+  ).join("");
+  const page = `<!doctype html><html><body><div id="app">
+    <header><nav><a href="/a">About</a><a href="/b">Process</a></nav></header>
+    ${sections}
+    <footer><p>Company details in the footer.</p></footer>
+  </div></body></html>`;
+
+  const grouped = groupIntoSections(deriveBlocks(withBoxes(blocksOf(page), () => true), []));
+
+  // The whole page as one band named after the navigation is the failure this
+  // guards: its first block is a nav link, but 2 blocks of 45 are not chrome.
+  assert.ok(grouped.length > 3, `expected real bands, got ${grouped.length}`);
+  assert.ok(
+    !grouped.some((s) => s.chrome === "nav" && sectionBlocks(s).length > 20),
+    "the navigation band swallowed the page",
+  );
+  const labels = grouped.map((s) => s.label);
+  assert.ok(labels.includes("Section 7"), `expected middle sections as bands, got ${labels.join(" | ")}`);
+});
+
+test("an added section is one row per element, and typing edits only that element", () => {
+  // derive.ts parses an inserted fragment with DOMParser, which the browser has
+  // and node does not. jsdom supplies the same implementation the server uses.
+  const parserWindow = new JSDOM("").window;
+  const had = "DOMParser" in globalThis;
+  if (!had) (globalThis as { DOMParser?: unknown }).DOMParser = parserWindow.DOMParser;
+
+  try {
+    const page = `<!doctype html><html><body><main>
+      <section><h2>What you get</h2><p>Everything in the box.</p></section>
+    </main></body></html>`;
+    const blocks = withBoxes(blocksOf(page), () => true);
+    const anchor = blocks[blocks.length - 1];
+
+    // What addSection builds: a template, stamped with ids at op-creation time.
+    const html =
+      '<section data-cu-id="new:sec"><h2 data-cu-id="new:head">Section heading</h2>' +
+      '<p data-cu-id="new:body">The opening paragraph of this section.</p></section>';
+    const insert: Op = { t: "insert", refId: anchor.id, pos: "after", html };
+
+    const rows = deriveBlocks(blocks, [insert]);
+    const added = rows.filter((d) => d.block.id.startsWith("new:"));
+    assert.deepEqual(
+      added.map((d) => d.block.id),
+      ["new:head", "new:body"],
+      "the heading and the paragraph are separate rows, and the wrapper is not one",
+    );
+    assert.equal(added[0].block.tag, "h2");
+    assert.equal(added[0].html, "Section heading");
+
+    // Typing into the heading edits the heading, and the paragraph is untouched.
+    const typed: Op[] = [insert, { t: "setText", id: "new:head", html: "Our guarantee" }];
+    const after = deriveBlocks(blocks, typed).filter((d) => d.block.id.startsWith("new:"));
+    assert.equal(after.find((d) => d.block.id === "new:head")?.text, "Our guarantee");
+    assert.equal(
+      after.find((d) => d.block.id === "new:body")?.text,
+      "The opening paragraph of this section.",
+    );
+  } finally {
+    if (!had) delete (globalThis as { DOMParser?: unknown }).DOMParser;
+    parserWindow.close();
+  }
+});

@@ -125,6 +125,7 @@ export default async function VersionWorkspace({
 
       <Workspace
         pageId={pageId}
+        pageUrl={page.url}
         snapshotId={snapshot.id}
         runtimeVersion={await browserScriptHash("preview")}
         version={current}

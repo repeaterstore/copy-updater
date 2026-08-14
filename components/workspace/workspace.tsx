@@ -37,6 +37,7 @@ import {
   type Device,
 } from "./preview-pane";
 import { InspectorPane, visibilityOf, type Visibility } from "./inspector-pane";
+import { MetaCompare } from "./meta-compare";
 import { OutlinePane } from "./outline-pane";
 
 export interface WorkspaceVersion {
@@ -86,6 +87,7 @@ function classesNow(ops: Op[], block: Block): string[] {
 
 export function Workspace({
   pageId,
+  pageUrl,
   snapshotId,
   runtimeVersion,
   version,
@@ -99,6 +101,8 @@ export function Workspace({
   comments,
 }: {
   pageId: string;
+  /** The captured page's address, for the search-result preview. */
+  pageUrl: string;
   snapshotId: string;
   runtimeVersion: string;
   version: WorkspaceVersion;
@@ -766,13 +770,30 @@ export function Workspace({
 
         <main
           ref={previewRef}
-          className={`min-h-0 min-w-0 ${pane === "preview" ? "" : "hidden xl:block"}`}
+          // Never both `flex` and `hidden` in the same list: they set the same
+          // property, so which one wins is down to stylesheet order.
+          className={`min-h-0 min-w-0 flex-col ${
+            pane === "preview" ? "flex" : "hidden xl:flex"
+          }`}
         >
+          {/* Only while the meta row is the selection. The title and
+              description are the one change a version can make that the page
+              itself cannot show, and the rest of the time this would be a strip
+              of chrome taking height from the thing being reviewed. */}
+          {selectedId === null ? (
+            <MetaCompare
+              meta={meta}
+              baseline={baselineMeta}
+              url={pageUrl}
+              baselineName={parentLabel ?? "Live page"}
+            />
+          ) : null}
+
           {/* The primary frame keeps its place in the tree whatever the device
               is, so switching modes never remounts it — a remount means
               re-downloading a snapshot that can run to tens of megabytes. */}
           <div
-            className={`flex h-full min-h-0 min-w-0 ${
+            className={`flex min-h-0 min-w-0 flex-1 ${
               stacked && showCompanion ? "flex-col overflow-auto" : "flex-row"
             }`}
           >

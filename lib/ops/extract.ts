@@ -51,10 +51,32 @@ function roleFor(el: Element): BlockRole {
  * True when the element's entire subtree is inline markup, so its innerHTML can
  * be edited as one field without destroying nested structure.
  */
+/**
+ * Elements that hold copy, and so still hold a slot when the copy is a picture.
+ *
+ * Kept deliberately narrow. Any element whose subtree is inline and whose text
+ * is empty would also cover every logo link and icon span on the page — 83 of
+ * them on the bufferbloat page alone, none of which is copy. Restricted to the
+ * tags that exist to carry text, that same page gains exactly none.
+ */
+const TEXT_CONTAINERS = new Set([
+  "P", "H1", "H2", "H3", "H4", "H5", "H6", "LI", "FIGURE", "FIGCAPTION",
+  "BLOCKQUOTE", "TD", "DD", "DT",
+]);
+
 export function isBlockCandidate(el: Element): boolean {
   const tag = el.tagName.toUpperCase();
   if (SKIP_TAGS.has(tag)) return false;
-  if (!el.textContent || el.textContent.trim() === "") return false;
+  const empty = !el.textContent || el.textContent.trim() === "";
+  /*
+   * An empty text container holding a picture is still a block.
+   *
+   * Pasting a photo into a placeholder replaces its wording with an `<img>`,
+   * which leaves the element with no text at all — so it stopped being a block,
+   * dropped out of the outline, and the picture became something present on the
+   * page that nothing in the tool could select, edit or undo.
+   */
+  if (empty && !(TEXT_CONTAINERS.has(tag) && el.querySelector("img, picture"))) return false;
   for (const desc of Array.from(el.getElementsByTagName("*"))) {
     if (!INLINE_TAGS.has(desc.tagName.toUpperCase())) return false;
   }
@@ -167,7 +189,9 @@ export function extractBlocks(
 
     if (isBlockCandidate(el)) {
       const text = (el.textContent ?? "").replace(/\s+/g, " ").trim();
-      if (text !== "") {
+      // isBlockCandidate has already decided an empty one is a picture in a
+      // text container; this second test only has to agree with it.
+      if (text !== "" || el.querySelector("img, picture")) {
         const role = roleFor(el);
         // A heading names its own section. Assigning before the push (rather
         // than after) stops each heading being filed under the previous one,

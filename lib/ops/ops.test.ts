@@ -319,3 +319,25 @@ test("markup copied with an existing id is re-stamped, not left to collide", () 
   const kept = assignNewIds(doc, `<p data-cu-id="${existing.id}">Reworded</p>`, existing.id);
   assert.ok(kept.includes(existing.id), "the replaced element keeps its identity");
 });
+
+test("a picture pasted into a placeholder stays a block", () => {
+  const { doc } = domOf(
+    `<!doctype html><html><body><section><h2>Gallery</h2><p>PHOTO GOES HERE</p></section></body></html>`,
+  );
+  stampIds(doc);
+  const gap = extractBlocks(doc).find((b) => b.text === "PHOTO GOES HERE")!;
+
+  // Exactly what the inspector's paste writes into the block.
+  const html =
+    '<img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAA==" alt="" ' +
+    'style="display:block;max-width:100%;height:auto" />';
+  const result = applyOps(doc, [{ t: "setText", id: gap.id, html }]);
+  assert.equal(result.failures.length, 0);
+
+  const after = extractBlocks(doc);
+  const still = after.find((b) => b.id === gap.id);
+  // Without this the element has no text, stops being a block, and the picture
+  // becomes something on the page that nothing in the outline can reach.
+  assert.ok(still, `the image block disappeared; blocks are ${after.map((b) => b.id).join(", ")}`);
+  assert.match(still.html, /data:image\/jpeg/);
+});

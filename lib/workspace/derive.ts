@@ -11,6 +11,7 @@
 import { diffWords } from "diff";
 import type { Block, Op, PageMeta } from "@/lib/ops/types";
 import type { WordPart } from "@/lib/ops/diff";
+import { extractBlocks } from "@/lib/ops/extract";
 
 export interface DerivedBlock {
   block: Block;
@@ -119,57 +120,100 @@ export function deriveBlocks(baseline: Block[], ops: Op[]): DerivedBlock[] {
 }
 
 /**
+ * The blocks an inserted fragment resolves into, read out of its own markup.
+ *
+ * Parsed with the same extractor the server uses, so the ids, tags and roles
+ * are the ones the version will really have once it saves — the fragment
+ * carries them already, minted when the op was created.
+ *
+ * One row per element, not one per op, and that distinction is the whole
+ * point. An insert used to be a single row identified by the fragment's
+ * outermost element, which is right for `<li>Free returns</li>` and wrong for
+ * everything the section templates add: for `<section><h2>…</h2><p>…</p>`
+ * the outermost element is the `<section>`, a container that is not a block
+ * at all. Typing into that row wrote a setText against the `<section>`,
+ * replacing its innerHTML with a run of plain text — which deleted the heading
+ * and the paragraph. The section did not so much vanish as get overwritten by
+ * the first thing typed into it.
+ */
+function fragmentBlocks(html: string): Block[] {
+  if (typeof DOMParser === "undefined") return [];
+  try {
+    return extractBlocks(new DOMParser().parseFromString(html, "text/html"));
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Put inserted blocks into the list, next to what they were inserted against.
  *
  * They are on the page — the preview applies insert ops like any other — but
  * derived from the baseline alone they were missing from the outline, so an
  * added bullet appeared in the preview and nowhere in the list beside it.
- *
- * Placed adjacent to the anchor rather than exactly where the DOM puts them:
- * firstChild and lastChild land inside a container whose position in a flat
- * list of text blocks is not defined. Adjacent is right for reading order,
- * which is what the outline is for.
  */
 function withInserts(blocks: DerivedBlock[], ops: Op[]): DerivedBlock[] {
   const inserts = ops.filter((op) => op.t === "insert");
   if (inserts.length === 0) return blocks;
 
+  const overrides = textOverrides(ops);
   const next = [...blocks];
+
   for (const op of inserts) {
     if (op.t !== "insert") continue;
-    const id = insertedId(op);
-    if (!id || next.some((d) => d.block.id === id)) continue;
 
-    const text = htmlToText(op.html);
-    const derived: DerivedBlock = {
-      block: {
-        id,
-        tag: "div",
-        role: "other",
-        // The text, not the fragment's markup. Every other block's html is its
-        // innerHTML, and the inspector edits that field directly — handed the
-        // outer markup it showed the reviewer a <p> tag to edit.
-        html: text,
+    const parsed = fragmentBlocks(op.html);
+    // Nothing extractable — a bare run of text, or no DOM to parse with. Fall
+    // back to naming the whole fragment after its outermost element, which is
+    // at least a row the reviewer can see and revert.
+    const parts: Block[] =
+      parsed.length > 0
+        ? parsed
+        : (() => {
+            const id = insertedId(op);
+            if (!id) return [];
+            const text = htmlToText(op.html);
+            return [{
+              id, tag: "div", role: "other" as const, html: text, text,
+              order: 0, sectionLabel: null, classes: [], box: null,
+            }];
+          })();
+
+    const rows: DerivedBlock[] = [];
+    for (const block of parts) {
+      if (next.some((d) => d.block.id === block.id)) continue;
+      if (rows.some((d) => d.block.id === block.id)) continue;
+
+      // An edit made since it was inserted. The op list is the only record of
+      // it — the fragment's markup is frozen at the moment it was added — so
+      // without this the outline goes on showing the template's placeholder
+      // wording after the copywriter has replaced it.
+      const html = overrides.get(block.id) ?? block.html;
+      const text = overrides.has(block.id) ? htmlToText(html) : block.text;
+
+      rows.push({
+        block,
+        html,
         text,
-        order: 0,
-        sectionLabel: null,
-        classes: [],
-        // No capture-time geometry: it did not exist when the page was frozen.
-        box: null,
-      },
-      html: text,
-      text,
-      // Added, not edited. The word diff has nothing to compare it against.
-      changed: false,
-      words: null,
-      growth: null,
-      layoutRisk: false,
-      anchorId: op.refId,
-    };
+        // Added, not edited. The word diff has nothing to compare it against.
+        changed: false,
+        words: null,
+        growth: null,
+        layoutRisk: false,
+        anchorId: op.refId,
+      });
+    }
+    if (rows.length === 0) continue;
 
+    /*
+     * Placed adjacent to the anchor rather than where the DOM puts them:
+     * firstChild and lastChild land inside a container whose position in a
+     * flat list of text blocks is not defined. Adjacent is right for reading
+     * order, which is what the outline is for.
+     */
     const anchor = next.findIndex((d) => d.block.id === op.refId);
-    if (anchor === -1) next.push(derived);
-    else next.splice(op.pos === "before" ? anchor : anchor + 1, 0, derived);
+    if (anchor === -1) next.push(...rows);
+    else next.splice(op.pos === "before" ? anchor : anchor + 1, 0, ...rows);
   }
   return next;
 }
@@ -312,11 +356,20 @@ const SPLIT_ABOVE = 60;
 const MAX_SPLIT_DEPTH = 4;
 
 /**
- * A container whose children number more than this is a list, not a run of
- * bands. Descending into a 90-item `<ul>` yields 90 groups of one row each,
- * which is not an outline — it is the block list with extra headers.
+ * What tells a run of bands from a list, now that counting them does not.
+ *
+ * Descending into a 90-item `<ul>` yields 90 groups of one row each, which is
+ * not an outline — it is the block list with extra headers. That was held off
+ * with a cap of twelve groups per container, which also refused every page
+ * built as more than twelve sections: the RSRF pages put every section as a
+ * sibling under one wrapper div, so the split into real bands was rejected for
+ * being too successful and the whole page stayed a single 218-block band.
+ *
+ * The giveaway is not how many parts there are but how thin they are. A list
+ * splits into parts of one row each; a page splits into parts with content in
+ * them. So: reject the split when most of what it produced is single rows.
  */
-const MAX_BANDS_PER_CONTAINER = 12;
+const MOSTLY_SINGLES = 0.5;
 
 /** `body/div:3/div:1/p:2` at depth 1 is `body/div:3`. */
 function containerAt(block: Block, depth: number): string {
@@ -379,9 +432,29 @@ function splitInto(blocks: DerivedBlock[], depth: number): Group[] {
   return groups;
 }
 
+/**
+ * How much of a group has to be furniture before the group is furniture.
+ *
+ * The kind used to be read off the first block alone, which held while every
+ * page put its header, main and footer as siblings of `<body>`: the header
+ * group really was all header. A React site wraps the entire page in one
+ * `<div>`, so at the top level there is a single group containing everything —
+ * and because its first block sits in the `<header>`, the whole page was
+ * declared "Navigation & header". Being chrome, it was then never split any
+ * further, which is how the RSRF contact page arrived as one band of 218
+ * blocks with no structure at all.
+ */
+const CHROME_MAJORITY = 0.8;
+
 function chromeOf(group: Group): ChromeKind | null {
-  const tagged = group.blocks[0] ? chromeKindOf(group.blocks[0].block) : null;
-  if (tagged) return tagged;
+  const counts = new Map<ChromeKind, number>();
+  for (const derived of group.blocks) {
+    const kind = chromeKindOf(derived.block);
+    if (kind) counts.set(kind, (counts.get(kind) ?? 0) + 1);
+  }
+  for (const [kind, n] of counts) {
+    if (n / group.blocks.length >= CHROME_MAJORITY) return kind;
+  }
   const visible = group.blocks.filter((d) => isVisible(d.block)).length;
   return visible / group.blocks.length < CHROME_VISIBLE_RATIO ? "nav" : null;
 }
@@ -401,7 +474,8 @@ function bandsOf(blocks: DerivedBlock[]): { group: Group; chrome: ChromeKind | n
     for (const group of groups) {
       const splittable = group.blocks.length > SPLIT_ABOVE && chromeOf(group) === null;
       const parts = splittable ? splitInto(group.blocks, group.depth + 1) : [group];
-      const useful = parts.length > 1 && parts.length <= MAX_BANDS_PER_CONTAINER;
+      const singles = parts.filter((p) => p.blocks.length === 1).length;
+      const useful = parts.length > 1 && singles / parts.length < MOSTLY_SINGLES;
       if (useful) {
         changed = true;
         next.push(...parts);
