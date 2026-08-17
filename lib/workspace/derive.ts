@@ -657,9 +657,119 @@ export function groupIntoSections(blocks: DerivedBlock[]): Section[] {
       }
       stack[stack.length - 1].blocks.push(derived);
     }
+
+    groupRepeatedCards(band);
   });
 
   return roots;
+}
+
+/**
+ * Break a flat run of blocks into the cards it is really made of.
+ *
+ * A band with no headings inside it arrives as one long list: a six-card grid
+ * on the RSRF contact page is twelve rows, and nothing says which body belongs
+ * to which title. The page knows — each card is a container, and every block
+ * carries its container path in its id — so the grouping is already there to
+ * be read.
+ *
+ * Only where the page is genuinely built that way. The same descent applied
+ * indiscriminately turns a list of one-line bullets into one group per bullet,
+ * which is the block list with extra headers and worse than the flat run it
+ * replaced. The test is the one the top-level bands already use: a split whose
+ * parts are mostly single rows is not structure, it is a list.
+ *
+ * On the RSRF contact page this groups the card grids, the testimonial pairs
+ * and the footer's link columns, and declines the bullet lists — which is the
+ * split the measurements asked for.
+ */
+function groupRepeatedCards(band: Section): void {
+  // Only a band that is otherwise structureless. Where headings already carve
+  // it up, that is the author's own outline and it wins.
+  if (band.children.length > 0) return;
+  if (band.blocks.length < MIN_BLOCKS_TO_GROUP) return;
+
+  /*
+   * The band keeps its own first row and the rest is carved.
+   *
+   * Carving all of them and then keeping the first as well listed it twice —
+   * once as the band's own row and once at the head of the group it fell into.
+   * It is usually the section's title, which is exactly the row that should
+   * stay put while the cards beneath it are grouped.
+   */
+  const rest = band.blocks.slice(1);
+  if (rest.length < MIN_BLOCKS_TO_GROUP) return;
+
+  const depth = commonDepth(rest);
+  if (depth === null) return;
+
+  const parts = carve(rest, depth, 0);
+  if (parts.length < 2) return;
+
+  // The first block names the group, because on a card that is its title.
+  band.children = parts.map((part) => ({
+    id: part[0].block.id,
+    label: part[0].text || part[0].block.text || "…",
+    path: [...band.path, part[0].text || "…"],
+    level: band.level + 1,
+    blocks: part,
+    children: [],
+    chrome: null,
+  }));
+  band.blocks = band.blocks.slice(0, 1);
+}
+
+/**
+ * Split a run of blocks by container, and keep going while it stays useful.
+ *
+ * One level is rarely the answer. A card grid is a heading and a container, and
+ * the container holds every card — so splitting once yields a group of two and
+ * a group of ten, and the ten cards nobody can tell apart are still in one row.
+ * Each part is therefore split again, until the split stops being structure.
+ *
+ * "Stops being structure" is the same test the top-level bands use: a split
+ * whose parts are mostly single rows is a list, not a grid, and grouping it
+ * yields one header per bullet.
+ */
+function carve(blocks: DerivedBlock[], depth: number, level: number): DerivedBlock[][] {
+  if (level >= MAX_CARD_DEPTH || blocks.length < MIN_BLOCKS_TO_GROUP) return [blocks];
+
+  const parts = splitInto(blocks, depth);
+  if (parts.length < 2) {
+    // Nothing divided here, but a deeper container may still divide it — this
+    // is the wrapper-div case again, one level down.
+    return level + 1 < MAX_CARD_DEPTH ? carve(blocks, depth + 1, level + 1) : [blocks];
+  }
+
+  const singles = parts.filter((p) => p.blocks.length === 1).length;
+  if (singles / parts.length >= MOSTLY_SINGLES) return [blocks];
+
+  return parts.flatMap((part) => carve(part.blocks, depth + 1, level + 1));
+}
+
+/** How far past a band's own container the search for cards may go. */
+const MAX_CARD_DEPTH = 4;
+
+/** A band worth carving up. Below this the flat list is easier to read. */
+const MIN_BLOCKS_TO_GROUP = 6;
+
+/**
+ * How deep the blocks of a band agree, which is where their cards divide.
+ *
+ * Every block in a band shares a container prefix; one segment past the end of
+ * that prefix is the card. Null when they do not share one, which means there
+ * is nothing to divide on.
+ */
+function commonDepth(blocks: DerivedBlock[]): number | null {
+  const paths = blocks.map((d) => d.block.id.split("/")).filter((p) => p.length > 1);
+  if (paths.length < 2) return null;
+
+  let shared = 0;
+  const shortest = Math.min(...paths.map((p) => p.length));
+  while (shared < shortest - 1 && paths.every((p) => p[shared] === paths[0][shared])) {
+    shared += 1;
+  }
+  return shared >= 1 ? shared : null;
 }
 
 /**

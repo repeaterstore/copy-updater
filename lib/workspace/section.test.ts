@@ -508,3 +508,55 @@ test("a removed block stays listed so it can be seen and put back", () => {
   const scope = sectionScopeFor(derived, blocks[0].id);
   assert.ok(!scope?.blockIds.includes(doomed.id), "kept out of AI scope");
 });
+
+test("a card grid becomes one group per card, and a bullet list does not", () => {
+  // Cards titled with <p>, not <h3> — the shape that used to arrive as one
+  // flat run, because heading-based subsections have nothing to work with.
+  const cards = Array.from({ length: 5 }, (_, i) =>
+    `<div class="card"><p class="t">Card ${i + 1}</p><p>Body copy for card ${i + 1}.</p></div>`,
+  ).join("");
+  const bullets = Array.from({ length: 12 }, (_, i) => `<li>Point ${i + 1}.</li>`).join("");
+  // Enough of a page that it splits into bands at all; below the threshold the
+  // whole document is one band and the sections never separate.
+  const filler = Array.from({ length: 70 }, (_, i) => `<p>Filler paragraph ${i + 1}.</p>`).join("");
+
+  const page = `<!doctype html><html><body><main>
+    <section><h2>Our solutions</h2><div class="grid">${cards}</div></section>
+    <section><h2>What you get</h2><ul>${bullets}</ul></section>
+    <section>${filler}</section>
+  </main></body></html>`;
+
+  const grouped = groupIntoSections(deriveBlocks(withBoxes(blocksOf(page), () => true), []));
+
+  const solutions = grouped.find((s) => s.label === "Our solutions");
+  assert.ok(solutions, `no solutions band; got ${grouped.map((s) => s.label).join(" | ")}`);
+  // Five cards, each its own group named by its title — not ten rows in a row
+  // with nothing saying which body belongs to which title.
+  assert.equal(solutions.children.length, 5, "one group per card");
+  assert.deepEqual(
+    solutions.children.map((c) => c.label),
+    ["Card 1", "Card 2", "Card 3", "Card 4", "Card 5"],
+  );
+  assert.ok(solutions.children.every((c) => c.blocks.length === 2));
+
+  // The list is left alone: one group per bullet is the block list with extra
+  // headers, which is worse than the flat run it would replace.
+  const list = grouped.find((s) => s.label === "What you get");
+  assert.ok(list, "found the list section");
+  assert.equal(list.children.length, 0, "a bullet list is not a grid");
+});
+
+test("grouping never lists a block twice or drops one", () => {
+  const cards = Array.from({ length: 4 }, (_, i) =>
+    `<div><h3>Item ${i + 1}</h3><p>Detail ${i + 1}.</p><a href="/x">More</a></div>`,
+  ).join("");
+  const page = `<!doctype html><html><body><main>
+    <section><h2>Heading</h2><p>Intro line.</p><div class="grid">${cards}</div></section>
+  </main></body></html>`;
+
+  const derived = deriveBlocks(withBoxes(blocksOf(page), () => true), []);
+  const listed = groupIntoSections(derived).flatMap((s) => sectionBlocks(s).map((d) => d.block.id));
+
+  assert.equal(new Set(listed).size, listed.length, "no block is listed twice");
+  assert.equal(new Set(listed).size, derived.length, "no block is dropped");
+});
