@@ -1,4 +1,8 @@
 #!/bin/sh
+# NOT what production runs. railway.json sets a `startCommand`, and that
+# overrides the Dockerfile's CMD — so this file is only used by anything that
+# runs the image directly. Both have to be kept in step; the rebuild step below
+# sat here unexecuted for a full day because only this one was updated.
 # Railway mounts the volume at /data owned by root, shadowing the build-time
 # chown in the Dockerfile — the app then fails mid-capture with
 # "EACCES: permission denied, mkdir '/data/snapshots'". Ownership has to be

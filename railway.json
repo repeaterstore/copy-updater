@@ -5,7 +5,7 @@
     "dockerfilePath": "Dockerfile"
   },
   "deploy": {
-    "startCommand": "sh -c \"node_modules/.bin/tsx scripts/migrate.ts && node server.js\"",
+    "startCommand": "sh -c \"node_modules/.bin/tsx scripts/migrate.ts && { node_modules/.bin/tsx scripts/rebuild-stale.ts || echo '[start] rebuild-stale failed; continuing'; } && node server.js\"",
     "healthcheckPath": "/api/health",
     "healthcheckTimeout": 120,
     "restartPolicyType": "ON_FAILURE",
