@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { PageMeta } from "@/lib/ops/types";
 import type { DerivedBlock } from "@/lib/workspace/derive";
+import { nextDraft } from "@/lib/workspace/draft";
+import { tidy } from "@/lib/workspace/tidy";
 import { RichText } from "./rich-text";
 import { WordDiff } from "./word-diff";
 
@@ -124,26 +126,6 @@ export function InspectorPane({
   );
 }
 
-/**
- * The block's markup with the source page's own line breaks and indentation
- * taken out.
- *
- * A captured block keeps the whitespace it was written with — a heading is
- * routinely `"\n              Turn-Key DAS Solutions v3\n            "` — and
- * a browser collapses all of that when it renders, which is why the block
- * reads tight on the page and in "Currently on the page". A textarea does not:
- * it shows every character, so the copy appeared two blank lines down and
- * fourteen spaces in, with the box mostly empty around it.
- *
- * Collapsing runs of whitespace is what the renderer does anyway, so nothing
- * about the block changes — except inside `<pre>`, where the whitespace is the
- * content, so that is left exactly as captured.
- */
-function tidy(html: string): string {
-  if (/<pre[\s>]/i.test(html)) return html;
-  return html.replace(/\s+/g, " ").trim();
-}
-
 function BlockEditor({
   derived,
   onChange,
@@ -189,10 +171,27 @@ function BlockEditor({
   const [showHtml, setShowHtml] = useState(false);
   const [draft, setDraft] = useState(() => tidy(derived.html));
 
-  // Adopt external changes (an applied AI option, an inline edit in the
-  // preview) without clobbering what is being typed here.
+  /**
+   * What this editor last sent upward, so its own echo can be ignored.
+   *
+   * Everything typed here is reported immediately and comes straight back as
+   * the block's html. Writing that back into the field puts the caret at the
+   * start — which is what happened on every space, because `tidy` trims the
+   * trailing one and the value then differs from what is on screen.
+   */
+  const emitted = useRef<string | null>(null);
+
+  const publish = (html: string) => {
+    emitted.current = html;
+    setDraft(html);
+    onChange(derived.block.id, html);
+  };
+
+  // Adopt external changes — an applied AI option, an inline edit in the
+  // preview, a different block selected — without touching what is being typed.
   useEffect(() => {
-    setDraft(showHtml ? derived.html : tidy(derived.html));
+    const next = nextDraft(derived.html, emitted.current, showHtml);
+    if (next !== null) setDraft(next);
   }, [derived.html, showHtml]);
 
   const hasMarkup = /<[a-z][^>]*>/i.test(derived.block.html);
@@ -390,10 +389,7 @@ function BlockEditor({
               value={draft}
               readOnly={readOnly}
               onPaste={onPaste}
-              onChange={(e) => {
-                setDraft(e.target.value);
-                onChange(derived.block.id, e.target.value);
-              }}
+              onChange={(e) => publish(e.target.value)}
             />
           ) : (
             <RichText
@@ -402,10 +398,7 @@ function BlockEditor({
               className="text-sm"
               onPaste={onPaste}
               inlineVisibility={inlineVisibility}
-              onChange={(html) => {
-                setDraft(html);
-                onChange(derived.block.id, html);
-              }}
+              onChange={publish}
               onSplit={(before, after) => onSplit?.(derived.block.id, before, after)}
             />
           )}
