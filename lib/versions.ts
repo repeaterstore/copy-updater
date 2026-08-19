@@ -10,7 +10,7 @@ import { db, schema } from "@/db";
 import { diffResolved, type ResolvedDiff } from "@/lib/ops/diff";
 import { resolveVersion } from "@/lib/ops/resolve.server";
 import { withoutOrphans } from "@/lib/ops/prune";
-import type { Block, Op, OpFailure, Resolved } from "@/lib/ops/types";
+import { EXTRACTOR_VERSION, type Block, type Op, type OpFailure, type Resolved } from "@/lib/ops/types";
 import { readDataText } from "@/lib/storage";
 
 export type VersionRow = typeof schema.versions.$inferSelect;
@@ -231,4 +231,50 @@ export async function latestReadySnapshot(
     ),
     orderBy: (s, { desc }) => [desc(s.capturedAt)],
   });
+}
+
+/**
+ * Bring versions saved by an older extractor up to date.
+ *
+ * `resolved` is derived data cached on the row, so a version keeps whatever
+ * extraction produced at its last save — potentially for months. Change what
+ * counts as a block and the two sides of a diff stop agreeing. Rebuilding also
+ * drops ops that can never apply, which is how versions already carrying
+ * orphaned edits repair themselves.
+ *
+ * Guarded by the stamp, so this costs one query on every boot after the one
+ * that needed it. Never throws: a stale cache is recoverable, and nothing about
+ * it should stop the server serving.
+ */
+export async function rebuildStaleVersions(): Promise<void> {
+  const versions = await db
+    .select({
+      id: schema.versions.id,
+      label: schema.versions.label,
+      resolved: schema.versions.resolved,
+    })
+    .from(schema.versions);
+
+  const stale = versions.filter((v) => (v.resolved?.v ?? 0) < EXTRACTOR_VERSION);
+  if (stale.length === 0) {
+    console.log(`[startup] all ${versions.length} version(s) at extractor v${EXTRACTOR_VERSION}`);
+    return;
+  }
+
+  console.log(`[startup] rebuilding ${stale.length} of ${versions.length} version(s)`);
+  let done = 0;
+  for (const version of stale) {
+    try {
+      const { failures } = await rebuildResolved(version.id);
+      done += 1;
+      if (failures.length > 0) {
+        console.log(`[startup]   ! ${version.label}: ${failures.length} op(s) no longer apply`);
+      }
+    } catch (error) {
+      console.log(
+        `[startup]   ✗ ${version.label}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  console.log(`[startup] rebuilt ${done}/${stale.length}`);
 }

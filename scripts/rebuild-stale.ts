@@ -1,7 +1,12 @@
 /**
  * Rebuilds the `resolved` cache of versions produced by an older extractor.
  *
- * Runs at container start, before the server accepts traffic. `resolved` is
+ * A manual entry point. The server does this for itself at start-up, from
+ * instrumentation.ts — running it as a separate process against the standalone
+ * build fails to resolve the app's own imports. This exists for running it by
+ * hand against a database, and calls exactly the same function.
+ *
+ * `resolved` is
  * derived data — the ops are the source of truth — but it is *stored*, so a
  * version keeps whatever the extractor produced on its last save. When
  * extraction changes what counts as a block, the stored copy and a freshly
@@ -9,67 +14,15 @@
  * nobody made: making images blocks meant every image on a page read as
  * removed copy in versions that had not been touched in months.
  *
- * Guarded by the stamp rather than run unconditionally, so this costs one query
- * on every boot after the one that needs it. A thousand-block page takes ~4s to
- * resolve, and doing that for every version on every restart would put minutes
- * into each deploy for no reason.
- *
- * Never fails the boot. A version that cannot be rebuilt is one version showing
- * a stale diff; a container that will not start is the whole tool down.
- *
  *   npx tsx scripts/rebuild-stale.ts
  */
-import { db, schema } from "@/db";
-import { EXTRACTOR_VERSION } from "@/lib/ops/types";
-import { rebuildResolved } from "@/lib/versions";
+import { rebuildStaleVersions } from "@/lib/versions";
 
-async function main() {
-  const versions = await db
-    .select({
-      id: schema.versions.id,
-      label: schema.versions.label,
-      resolved: schema.versions.resolved,
-    })
-    .from(schema.versions);
-
-  const stale = versions.filter((v) => (v.resolved?.v ?? 0) < EXTRACTOR_VERSION);
-  if (stale.length === 0) {
-    console.log(`[rebuild-stale] all ${versions.length} version(s) at extractor v${EXTRACTOR_VERSION}`);
-    return;
-  }
-
-  console.log(`[rebuild-stale] rebuilding ${stale.length} of ${versions.length} version(s)`);
-  let done = 0;
-  for (const version of stale) {
-    try {
-      const { failures } = await rebuildResolved(version.id);
-      done += 1;
-      // Reported rather than swallowed. The ops are untouched — they are the
-      // source of truth and this only recomputes the cache — but an op that no
-      // longer applies is a version whose diff is quietly smaller than its
-      // author intended, and nobody would otherwise ever hear about it.
-      if (failures.length > 0) {
-        console.log(
-          `[rebuild-stale]   ! ${version.label}: ${failures.length} op(s) no longer apply`,
-        );
-        for (const failure of failures.slice(0, 5)) {
-          console.log(`[rebuild-stale]       ${failure.reason}`);
-        }
-      }
-    } catch (error) {
-      console.log(
-        `[rebuild-stale]   ✗ ${version.label}: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  }
-  console.log(`[rebuild-stale] rebuilt ${done}/${stale.length}`);
-}
-
-main()
+rebuildStaleVersions()
   .then(() => process.exit(0))
   .catch((error) => {
-    // Deliberately exit 0: a stale diff is recoverable, a container that will
-    // not boot is not.
+    // Exit 0 deliberately: a stale cache is recoverable, and this is also run
+    // from places where failing loudly would stop something more important.
     console.error("[rebuild-stale] skipped:", error);
     process.exit(0);
   });

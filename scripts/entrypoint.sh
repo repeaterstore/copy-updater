@@ -12,10 +12,8 @@ set -e
 
 chown -R pwuser:pwuser /data
 
-# rebuild-stale only does work when the extractor has changed since a version
-# was last saved. Its failure is tolerated *here* rather than trusted to the
-# script: it catches its own errors and exits 0, but a module that throws while
-# being imported never reaches that handler, and `set -e` would then take the
-# whole container down over a stale cache. A stale diff is recoverable; a
-# container that will not boot is the tool being down.
-exec su -s /bin/sh pwuser -c "node_modules/.bin/tsx scripts/migrate.ts && { node_modules/.bin/tsx scripts/rebuild-stale.ts || echo '[entrypoint] rebuild-stale failed; continuing'; } && node server.js"
+# The stale-cache rebuild is not here: the server does it for itself on start-up
+# from instrumentation.ts, where its imports resolve against the build Next
+# traced. Run as a separate process against the standalone output it failed
+# every boot with "Cannot find module 'diff'".
+exec su -s /bin/sh pwuser -c "node_modules/.bin/tsx scripts/migrate.ts && node server.js"
