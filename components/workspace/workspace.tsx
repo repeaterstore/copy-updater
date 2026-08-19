@@ -34,6 +34,7 @@ import {
   phonePaneWidth,
   PreviewPane,
   ViewportSelect,
+  WIDE_VIEWPORTS,
   wideViewport,
   type Device,
 } from "./preview-pane";
@@ -44,6 +45,7 @@ import {
   visibilityOf,
   type Visibility,
 } from "@/lib/ops/responsive";
+import { useRemembered } from "@/lib/workspace/remembered";
 import { MetaCompare } from "./meta-compare";
 import { OutlinePane } from "./outline-pane";
 
@@ -59,6 +61,26 @@ export interface WorkspaceVersion {
 }
 
 type Pane = "outline" | "preview" | "inspector";
+
+/*
+ * Guards for the remembered settings.
+ *
+ * A stored value is whatever was in this browser the last time, which may have
+ * been a different build: a viewport that has since been renamed, or a zoom
+ * level no longer offered. Anything unrecognised falls back to the default
+ * rather than stranding someone at a width the picker cannot show.
+ */
+function isDevice(value: unknown): value is Device {
+  return value === "desktop" || value === "mobile" || value === "both";
+}
+
+function isPhoneZoom(value: unknown): value is number {
+  return typeof value === "number" && (PHONE_ZOOMS as readonly number[]).includes(value);
+}
+
+function isWideViewportId(value: unknown): value is string {
+  return typeof value === "string" && WIDE_VIEWPORTS.some((v) => v.id === value);
+}
 
 /**
  * The stylesheet a version carries while any block is restricted to one device.
@@ -141,7 +163,14 @@ export function Workspace({
   const [ops, setOps] = useState<Op[]>(initialOps);
   const [savedOps, setSavedOps] = useState<Op[]>(initialOps);
   const [selectedId, setSelectedId] = useState<string | null>(initialBlockId);
-  const [device, setDevice] = useState<Device>("desktop");
+  /*
+   * The preview settings are remembered across refreshes.
+   *
+   * How someone likes to look at a page is a preference about reviewing, not
+   * about the version; resetting all three on every refresh meant setting them
+   * again on every refresh.
+   */
+  const [device, setDevice] = useRemembered<Device>("device", "desktop", isDevice);
   const [diffMode, setDiffMode] = useState(true);
   const [editMode, setEditMode] = useState(true);
   const [pane, setPane] = useState<Pane>("preview");
@@ -263,9 +292,13 @@ export function Workspace({
   });
   const showCompanion = device === "both";
   /** Life size by default; the pane widens and narrows with this. */
-  const [phoneZoom, setPhoneZoom] = useState(1);
+  const [phoneZoom, setPhoneZoom] = useRemembered<number>("phoneZoom", 1, isPhoneZoom);
   /** Which width the wide frame renders at — desktop, laptop or tablet. */
-  const [wideId, setWideId] = useState(DEFAULT_WIDE_VIEWPORT.id);
+  const [wideId, setWideId] = useRemembered<string>(
+    "wideViewport",
+    DEFAULT_WIDE_VIEWPORT.id,
+    isWideViewportId,
+  );
   const wide = wideViewport(wideId);
 
   /**
