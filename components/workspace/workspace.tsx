@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from
 import { useRouter } from "next/navigation";
 import type { Block, Op, PageMeta } from "@/lib/ops/types";
 import { assignNewIds, isNewId } from "@/lib/ops/ids";
+import { withoutOrphans } from "@/lib/ops/prune";
 import { sanitizeHtml } from "@/lib/ops/sanitize";
 import { usePreviewFrame } from "@/lib/preview/use-preview-frame";
 import {
@@ -575,13 +576,25 @@ export function Workspace({
   const revertBlocks = useCallback((ids: string[]) => {
     const inSection = new Set(ids);
     setOps((current) =>
-      current.filter((op) => {
-        if ("id" in op && typeof op.id === "string" && inSection.has(op.id)) return false;
-        // An insert or move names its anchor rather than itself, so a bullet
-        // added to this section would otherwise survive the revert.
-        if ("refId" in op && typeof op.refId === "string" && inSection.has(op.refId)) return false;
-        return true;
-      }),
+      /*
+       * Pruned afterwards, because dropping an insert strands the edits made to
+       * the blocks it created.
+       *
+       * This is where the orphans on the RSRF home page came from: a templated
+       * FAQ was added and two of its blocks were edited, then the section it
+       * was anchored in was reverted. The insert went — it names the anchor —
+       * and the two setTexts stayed, pointing at ids nothing would ever create
+       * again, so every save reported that it could not resolve them.
+       */
+      withoutOrphans(
+        current.filter((op) => {
+          if ("id" in op && typeof op.id === "string" && inSection.has(op.id)) return false;
+          // An insert or move names its anchor rather than itself, so a bullet
+          // added to this section would otherwise survive the revert.
+          if ("refId" in op && typeof op.refId === "string" && inSection.has(op.refId)) return false;
+          return true;
+        }),
+      ),
     );
   }, []);
 
@@ -618,7 +631,9 @@ export function Workspace({
           next.push(op);
         }
       }
-      return next;
+      // Superseding an option that inserted a section strands anything typed
+      // into it, for the same reason a section revert does.
+      return withoutOrphans(next);
     });
   }, []);
 

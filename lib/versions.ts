@@ -9,6 +9,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { db, schema } from "@/db";
 import { diffResolved, type ResolvedDiff } from "@/lib/ops/diff";
 import { resolveVersion } from "@/lib/ops/resolve.server";
+import { withoutOrphans } from "@/lib/ops/prune";
 import type { Block, Op, OpFailure, Resolved } from "@/lib/ops/types";
 import { readDataText } from "@/lib/storage";
 
@@ -70,13 +71,28 @@ export async function rebuildResolved(
   if (!snapshot) throw new Error("Snapshot not found.");
 
   const skeleton = await loadSkeleton(snapshot);
-  const { resolved, failures } = resolveVersion(skeleton, version.ops);
+
+  /*
+   * Ops that can never apply are dropped here as well as on save.
+   *
+   * A version left holding them reports the same failure on every save and has
+   * no way to shed them, because a reviewer cannot see or select a block that
+   * does not exist. Cleaning during the rebuild means the versions that already
+   * have them are repaired at start-up rather than needing someone to find and
+   * re-save each one.
+   */
+  const cleaned = withoutOrphans(version.ops);
+  const { resolved, failures } = resolveVersion(skeleton, cleaned);
 
   const withBoxes = { ...resolved, blocks: carryBoxes(resolved.blocks, snapshot) };
 
   await db
     .update(schema.versions)
-    .set({ resolved: withBoxes, updatedAt: new Date() })
+    .set({
+      resolved: withBoxes,
+      ...(cleaned.length === version.ops.length ? {} : { ops: cleaned }),
+      updatedAt: new Date(),
+    })
     .where(eq(schema.versions.id, versionId));
 
   return { resolved: withBoxes, failures };
@@ -103,9 +119,18 @@ export async function setVersionOps(
   versionId: string,
   ops: Op[],
 ): Promise<{ resolved: Resolved; failures: OpFailure[] }> {
+  /*
+   * Cleaned on the way in, so a list cannot carry ops that can never apply.
+   *
+   * An op against a `new:` id no insert creates is not a change anyone can see
+   * — the block does not exist — but it does report a failure on every save
+   * from then on, and nothing else would ever remove it. Versions already
+   * carrying them heal the next time they are saved.
+   */
+  const cleaned = withoutOrphans(ops);
   await db
     .update(schema.versions)
-    .set({ ops, updatedAt: new Date() })
+    .set({ ops: cleaned, updatedAt: new Date() })
     .where(eq(schema.versions.id, versionId));
   return rebuildResolved(versionId);
 }
