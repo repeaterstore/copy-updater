@@ -560,3 +560,44 @@ test("grouping never lists a block twice or drops one", () => {
   assert.equal(new Set(listed).size, listed.length, "no block is listed twice");
   assert.equal(new Set(listed).size, derived.length, "no block is dropped");
 });
+
+test("hiding part of a sentence counts as a change to the block", () => {
+  const page = `<!doctype html><html><body><main>
+    <section><h2>Coverage</h2><p>Cover every inch of your warehouse.</p></section>
+  </main></body></html>`;
+  const blocks = withBoxes(blocksOf(page), () => true);
+  const para = blocks.find((b) => b.text.startsWith("Cover every"))!;
+
+  // What the editor writes when words are tagged "desktop only": the wording is
+  // untouched, so a text diff sees nothing and the block read as unedited —
+  // no dot, nothing in the section count, and no revert control.
+  const tagged =
+    'Cover every inch of <span class="hidden md:inline">your warehouse</span>.';
+  const derived = deriveBlocks(blocks, [{ t: "setText", id: para.id, html: tagged }]);
+  const row = derived.find((d) => d.block.id === para.id)!;
+
+  assert.equal(row.text, "Cover every inch of your warehouse.", "the wording is the same");
+  assert.equal(row.changed, false, "and so it is not a reword");
+  assert.equal(row.restyled, true, "but it is still a change, and says so");
+});
+
+test("a parse round trip is still not a change", () => {
+  // The reason the text comparison exists: an op's html and the server's
+  // re-serialised copy differ in whitespace while describing the same content,
+  // and a forked version must not open showing every inherited edit as new.
+  const page = `<!doctype html><html><body><main>
+    <section><p>Boost your <b>signal</b> today.</p></section>
+  </main></body></html>`;
+  const blocks = withBoxes(blocksOf(page), () => true);
+  const para = blocks.find((b) => b.text.startsWith("Boost"))!;
+
+  // Indentation and spacing around attributes, which is what a parse and
+  // re-serialise actually changes — not the content between the tags.
+  const respaced = para.html
+    .replace(/></g, ">\n      <")
+    .replace(/=/g, " = ");
+  const row = deriveBlocks(blocks, [{ t: "setText", id: para.id, html: respaced }])
+    .find((d) => d.block.id === para.id)!;
+  assert.equal(row.changed, false);
+  assert.equal(row.restyled, false, "reformatting is not a restyle");
+});

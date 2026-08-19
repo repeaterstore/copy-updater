@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { cssEscape } from "@/lib/ops/extract";
 
 /**
  * A small rich text field for one block's inline content.
@@ -86,16 +87,39 @@ export function RichText({
     const selection = window.getSelection();
     if (!el || !selection || selection.rangeCount === 0) return;
     const range = selection.getRangeAt(0);
+    if (!el.contains(range.commonAncestorContainer)) return;
 
-    const node = range.commonAncestorContainer;
-    const start = (node.nodeType === 1 ? (node as Element) : node.parentElement) ?? null;
-    const existing = start?.closest("span[class]");
-    if (existing && el.contains(existing) && classes.every((c) => existing.classList.contains(c))) {
-      // Unwrap: the words stay, the wrapper goes.
+    /*
+     * Looked up from the caret, not from the selection as a whole.
+     *
+     * Removing the tag has to work when nothing is selected — the reviewer
+     * clicks into the tagged words and presses the button again — and the
+     * selection was being cleared after wrapping, so the very next click found
+     * no range at all and did nothing. That was the whole of "no way to remove
+     * the tag": the button worked, it just could never find what to undo.
+     */
+    const from = range.startContainer;
+    const start = from.nodeType === 1 ? (from as Element) : from.parentElement;
+    let existing: Element | null = start?.closest("span[class]") ?? null;
+    while (existing && el.contains(existing)) {
+      if (classes.every((c) => existing!.classList.contains(c))) break;
+      existing = existing.parentElement?.closest("span[class]") ?? null;
+    }
+
+    if (existing && el.contains(existing)) {
       const parent = existing.parentNode;
       if (parent) {
+        // Keep a caret in the words that were tagged, so a mistaken click can
+        // be undone by clicking again without hunting for the text.
+        const first = existing.firstChild;
         while (existing.firstChild) parent.insertBefore(existing.firstChild, existing);
         parent.removeChild(existing);
+        if (first) {
+          const after = document.createRange();
+          after.selectNodeContents(first.parentNode ?? parent);
+          selection.removeAllRanges();
+          selection.addRange(after);
+        }
       }
       onChange(el.innerHTML);
       return;
@@ -106,9 +130,46 @@ export function RichText({
     span.className = classes.join(" ");
     span.appendChild(range.extractContents());
     range.insertNode(span);
+
+    // The wrapped words stay selected, so the button that made the tag is also
+    // the button that takes it off.
+    const wrapped = document.createRange();
+    wrapped.selectNodeContents(span);
     selection.removeAllRanges();
+    selection.addRange(wrapped);
     onChange(el.innerHTML);
   };
+
+  /**
+   * A tag has to be visible in the field that made it.
+   *
+   * The classes are the page's own, and the page's stylesheet is not loaded
+   * here — so tagged words rendered exactly like every other word and there was
+   * no sign anything had happened. These rules mark them in the editor only;
+   * nothing is added to the markup, so the export stays the classes a developer
+   * asked for and nothing else.
+   */
+  const markerCss = [
+    inlineVisibility?.desktopOnly
+      ? { classes: inlineVisibility.desktopOnly, colour: "var(--color-accent)", label: "desktop" }
+      : null,
+    inlineVisibility?.mobileOnly
+      ? { classes: inlineVisibility.mobileOnly, colour: "var(--color-comment)", label: "mobile" }
+      : null,
+  ]
+    .filter((m): m is { classes: string[]; colour: string; label: string } => m !== null)
+    .map(({ classes, colour, label }) => {
+      const selector = classes.map((c) => `.${cssEscape(c)}`).join("");
+      return (
+        `[data-cu-rte] span${selector}{` +
+        `background:color-mix(in oklch, ${colour} 14%, transparent);` +
+        `box-shadow:inset 0 -2px ${colour};border-radius:2px}` +
+        `[data-cu-rte] span${selector}::after{content:" ${label} only";` +
+        `font-size:9px;letter-spacing:.04em;text-transform:uppercase;` +
+        `color:${colour};opacity:.85;white-space:nowrap}`
+      );
+    })
+    .join("");
 
   const button = (label: string, title: string, action: () => void, style?: string) => (
     <button
@@ -203,8 +264,10 @@ export function RichText({
           // wears, exactly as the preview builds it.
           onSplit(head, tail);
         }}
+        data-cu-rte=""
         className={`field min-h-16 whitespace-pre-wrap ${className ?? ""}`}
       />
+      {markerCss ? <style>{markerCss}</style> : null}
     </div>
   );
 }

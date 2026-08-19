@@ -97,14 +97,17 @@ export function metaOverrides(ops: Op[]): Partial<PageMeta> {
  * Comparing them literally makes a freshly forked version show every inherited
  * edit as a change the moment it opens.
  */
+function normalizeMarkup(html: string): string {
+  return html
+    .replace(/\s+/g, " ")
+    .replace(/\s*=\s*/g, "=")
+    .replace(/>\s+</g, "><")
+    .trim();
+}
+
 function sameMarkup(a: string, b: string): boolean {
   if (a === b) return true;
-  const normalize = (html: string) =>
-    html
-      .replace(/\s+/g, " ")
-      .replace(/\s*=\s*/g, "=")
-      .replace(/>\s+</g, "><")
-      .trim();
+  const normalize = normalizeMarkup;
   if (normalize(a) === normalize(b)) return true;
   // Fall back to text: markup that differs only in attribute order still reads
   // as the same copy to a reviewer.
@@ -123,6 +126,18 @@ export function deriveBlocks(baseline: Block[], ops: Op[]): DerivedBlock[] {
       const html = overrides.get(block.id) ?? block.html;
       const text = overrides.has(block.id) ? htmlToText(html) : block.text;
       const changed = !sameMarkup(html, block.html);
+      /*
+       * Markup changed, wording did not.
+       *
+       * Wrapping a phrase to hide it on mobile leaves the text identical, and
+       * `sameMarkup` deliberately falls back to comparing text — so the block
+       * read as untouched: no dot in the outline, nothing in the section count,
+       * and no revert control, because there was apparently nothing to revert.
+       * It is the same case as a class being set, so it is reported the same
+       * way.
+       */
+      const markupOnly =
+        !changed && normalizeMarkup(html) !== normalizeMarkup(block.html);
       const growth = block.text.length > 0 ? text.length / block.text.length : null;
 
       return {
@@ -134,7 +149,7 @@ export function deriveBlocks(baseline: Block[], ops: Op[]): DerivedBlock[] {
         growth,
         layoutRisk: changed && growth !== null && growth >= LAYOUT_RISK_RATIO,
         removed: removed.has(block.id),
-        restyled: restyled.has(block.id),
+        restyled: restyled.has(block.id) || markupOnly,
       };
     });
 
