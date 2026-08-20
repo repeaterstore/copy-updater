@@ -1,7 +1,20 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { cssEscape } from "@/lib/ops/extract";
+/**
+ * Escaping for a *class* selector, which is not the same job as escaping an
+ * attribute value.
+ *
+ * `.md:inline` reads as class `md` followed by a pseudo-class, so the rule is
+ * thrown away and nothing is marked at all. `CSS.escape` is the right tool and
+ * exists everywhere this runs; the fallback is for the server render, where no
+ * stylesheet is applied anyway.
+ */
+function escapeClass(name: string): string {
+  return typeof CSS !== "undefined" && typeof CSS.escape === "function"
+    ? CSS.escape(name)
+    : name.replace(/[^\w-]/g, (c) => `\\${c}`);
+}
 
 /**
  * A small rich text field for one block's inline content.
@@ -159,9 +172,17 @@ export function RichText({
   ]
     .filter((m): m is { classes: string[]; colour: string; label: string } => m !== null)
     .map(({ classes, colour, label }) => {
-      const selector = classes.map((c) => `.${cssEscape(c)}`).join("");
+      const selector = classes.map((c) => `.${escapeClass(c)}`).join("");
       return (
-        `[data-cu-rte] span${selector}{` +
+        /*
+         * Forced visible, because these are the page's classes and this app is
+         * built with the same utilities: `md:hidden` really does hide things at
+         * 768px, and the inspector is well past that on any desktop. Tagging a
+         * phrase "mobile only" made it disappear out of the box someone was
+         * editing. What the tag means belongs to the preview, where the page's
+         * own stylesheet decides; here it only has to be legible and marked.
+         */
+        `[data-cu-rte] span${selector}{display:inline!important;` +
         `background:color-mix(in oklch, ${colour} 14%, transparent);` +
         `box-shadow:inset 0 -2px ${colour};border-radius:2px}` +
         `[data-cu-rte] span${selector}::after{content:" ${label} only";` +
