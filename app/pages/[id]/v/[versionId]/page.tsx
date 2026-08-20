@@ -102,6 +102,7 @@ export default async function VersionWorkspace({
       createdAt: schema.comments.createdAt,
       authorName: schema.users.name,
       authorEmail: schema.users.email,
+      authorId: schema.comments.authorId,
     })
     .from(schema.comments)
     .leftJoin(schema.users, eq(schema.comments.authorId, schema.users.id))
@@ -153,6 +154,10 @@ export default async function VersionWorkspace({
           resolved: c.resolved,
           createdAt: c.createdAt.toISOString(),
           author: c.authorName ?? c.authorEmail ?? "unknown",
+          // Decided here, where the signed-in user is known for certain. The
+          // panel must not infer it from a display name: two people can share
+          // one, and the server refuses either way.
+          isMine: c.authorId !== null && c.authorId === user.id,
         }))}
       />
     </div>

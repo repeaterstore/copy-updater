@@ -6,6 +6,7 @@ import { db, schema } from "@/db";
 import { OpListSchema } from "@/lib/ops/schema";
 import type { Op } from "@/lib/ops/types";
 import type { VersionStatus } from "@/db/schema";
+import { canModifyComment } from "@/lib/comments/authorship";
 import { requireUser } from "@/lib/session";
 import { latestReadySnapshot, setVersionOps } from "@/lib/versions";
 
@@ -160,6 +161,77 @@ export async function addCommentAction(input: {
     where: eq(schema.versions.id, input.versionId),
   });
   if (version) revalidatePath(`/pages/${version.pageId}`);
+}
+
+/**
+ * Only the person who wrote a comment may change or remove it.
+ *
+ * Enforced here rather than by hiding the buttons: a server action is a public
+ * endpoint, and the panel not offering something is not the same as the server
+ * refusing it.
+ *
+ * A comment whose author has since been removed from the team belongs to
+ * nobody, so nobody can edit it. Resolving is deliberately left open to
+ * everyone — that is a statement about the work being done, not about the
+ * note, and it is how a reviewer closes off feedback they have acted on.
+ */
+async function requireCommentAuthor(commentId: string) {
+  const user = await requireUser();
+  const comment = await db.query.comments.findFirst({
+    where: eq(schema.comments.id, commentId),
+  });
+  if (!comment) throw new Error("Comment not found.");
+  if (!canModifyComment(comment, user.id)) {
+    throw new Error("Only the person who wrote a comment can change it.");
+  }
+  return comment;
+}
+
+export async function editCommentAction(
+  commentId: string,
+  body: string,
+): Promise<{ error?: string }> {
+  const trimmed = body.trim();
+  // An empty edit is a deletion someone did not ask for; the delete control is
+  // right next to this one.
+  if (trimmed === "") return { error: "A comment cannot be empty." };
+
+  let comment;
+  try {
+    comment = await requireCommentAuthor(commentId);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Not allowed." };
+  }
+
+  await db
+    .update(schema.comments)
+    .set({ body: trimmed })
+    .where(eq(schema.comments.id, commentId));
+
+  await revalidateForVersion(comment.versionId);
+  return {};
+}
+
+export async function deleteCommentAction(commentId: string): Promise<{ error?: string }> {
+  let comment;
+  try {
+    comment = await requireCommentAuthor(commentId);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : "Not allowed." };
+  }
+
+  await db.delete(schema.comments).where(eq(schema.comments.id, commentId));
+  await revalidateForVersion(comment.versionId);
+  return {};
+}
+
+/** The page a version belongs to, so its comment counts refresh. */
+async function revalidateForVersion(versionId: string): Promise<void> {
+  const version = await db.query.versions.findFirst({
+    where: eq(schema.versions.id, versionId),
+  });
+  if (version) revalidatePath(`/pages/${version.pageId}`);
+  revalidatePath("/design");
 }
 
 export async function resolveCommentAction(
