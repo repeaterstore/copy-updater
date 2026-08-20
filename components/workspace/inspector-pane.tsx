@@ -191,7 +191,13 @@ function BlockEditor({
   // preview, a different block selected — without touching what is being typed.
   useEffect(() => {
     const next = nextDraft(derived.html, emitted.current, showHtml);
-    if (next !== null) setDraft(next);
+    if (next === null) return;
+    setDraft(next);
+    // Forgotten once something else has replaced the content, or a value the
+    // editor typed long ago would be mistaken for its own echo when it came
+    // round again — cycling back to an earlier suggestion would leave the
+    // field showing one thing and the version holding another.
+    emitted.current = null;
   }, [derived.html, showHtml]);
 
   const hasMarkup = /<[a-z][^>]*>/i.test(derived.block.html);

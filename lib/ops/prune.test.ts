@@ -54,3 +54,47 @@ test("pruning is stable: a clean list is returned unchanged", () => {
   ];
   assert.deepEqual(withoutOrphans(withoutOrphans(ops)), ops);
 });
+
+test("edits to replaced content are not mistaken for orphans", () => {
+  // `replaceElement` stamps fresh ids onto its markup exactly as an insert
+  // does. Reading only inserts made every edit to replaced content look like it
+  // pointed at nothing — and this function deletes what it does not recognise.
+  const ops: Op[] = [
+    {
+      t: "replaceElement",
+      id: "body/main:1/section:1",
+      html: '<section data-cu-id="new:sec"><h2 data-cu-id="new:head">New</h2></section>',
+    },
+    { t: "setText", id: "new:head", html: "Reworded after the replacement" },
+    { t: "setAttr", id: "new:head", name: "class", value: "hidden md:block" },
+  ];
+  assert.deepEqual(withoutOrphans(ops), ops, "nothing here is orphaned");
+});
+
+test("single-quoted ids are recognised too", () => {
+  const ops: Op[] = [
+    { t: "insert", refId: "body/main:1/p:1", pos: "after", html: "<p data-cu-id='new:q'>Q</p>" },
+    { t: "setText", id: "new:q", html: "Edited" },
+  ];
+  assert.deepEqual(withoutOrphans(ops), ops);
+});
+
+test("a chain longer than ten links is fully unwound", () => {
+  // Each pass removes at least one op, so the list length is the real bound; a
+  // fixed ten stopped short and left the orphans this exists to remove.
+  const ops: Op[] = [];
+  for (let i = 0; i < 14; i += 1) {
+    ops.push({
+      t: "insert",
+      refId: i === 0 ? "new:missing" : `new:link${i - 1}`,
+      pos: "after",
+      html: `<p data-cu-id="new:link${i}">Link ${i}</p>`,
+    });
+    ops.push({ t: "setText", id: `new:link${i}`, html: `Edited ${i}` });
+  }
+  ops.push({ t: "setText", id: "body/main:1/h1:1", html: "A real block, kept" });
+
+  const cleaned = withoutOrphans(ops);
+  assert.equal(cleaned.length, 1, `everything hanging off the missing insert goes`);
+  assert.equal((cleaned[0] as { id: string }).id, "body/main:1/h1:1");
+});

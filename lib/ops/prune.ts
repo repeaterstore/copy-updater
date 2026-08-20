@@ -15,13 +15,27 @@
 import { ID_ATTR, type Op } from "./types";
 import { isNewId } from "./ids";
 
-/** Every id introduced by an insert in this list. */
+/**
+ * Every id introduced by markup in this list.
+ *
+ * Any op carrying html, not just `insert`. `replaceElement` stamps fresh ids
+ * onto the markup it swaps in exactly as an insert does, so reading only
+ * inserts made every edit to replaced content look like it pointed at nothing —
+ * and this function decides what gets deleted, so a gap here is lost work, not
+ * a warning.
+ *
+ * Both quote styles, because the schema accepts whatever markup a model writes
+ * even though everything that reaches storage has been through a serialiser
+ * that prefers double.
+ */
+const ID_IN_MARKUP = new RegExp(`${ID_ATTR}=(?:"([^"]+)"|'([^']+)')`, "g");
+
 function introduced(ops: Op[]): Set<string> {
   const ids = new Set<string>();
-  const pattern = new RegExp(`${ID_ATTR}="([^"]+)"`, "g");
   for (const op of ops) {
-    if (op.t !== "insert") continue;
-    for (const match of op.html.matchAll(pattern)) ids.add(match[1]);
+    const html = (op as { html?: unknown }).html;
+    if (typeof html !== "string") continue;
+    for (const match of html.matchAll(ID_IN_MARKUP)) ids.add(match[1] ?? match[2]);
   }
   return ids;
 }
@@ -42,7 +56,14 @@ function introduced(ops: Op[]): Set<string> {
 export function withoutOrphans(ops: Op[]): Op[] {
   let current = ops;
 
-  for (let pass = 0; pass < 10; pass += 1) {
+  /*
+   * Bounded by the list itself rather than an arbitrary count.
+   *
+   * Each pass that changes anything removes at least one op, so the list length
+   * is a real ceiling — a fixed ten stopped short on a longer chain and left
+   * exactly the orphans this exists to remove.
+   */
+  for (let pass = 0; pass <= ops.length; pass += 1) {
     const known = introduced(current);
     const orphaned = (id: string | undefined) =>
       typeof id === "string" && isNewId(id) && !known.has(id);

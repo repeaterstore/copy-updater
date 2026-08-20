@@ -105,6 +105,25 @@ function normalizeMarkup(html: string): string {
     .trim();
 }
 
+/**
+ * The same, with each tag's attributes sorted and quoted alike.
+ *
+ * Used only to decide whether markup meaningfully differs. A parse and
+ * re-serialise is free to reorder attributes and change quote style, and
+ * calling that a restyle would put a badge and a change count on every block of
+ * a freshly forked version — the exact false positive the text comparison
+ * exists to avoid, arriving by another door.
+ */
+function normalizeAttributes(html: string): string {
+  return normalizeMarkup(html).replace(/<([a-z][\w-]*)((?:\s[^>]*?)?)(\/?)>/gi, (_, tag, attrs: string, close) => {
+    const pairs = attrs.match(/[\w:.-]+(?:=(?:"[^"]*"|'[^']*'|[^\s>]+))?/g) ?? [];
+    const canonical = pairs
+      .map((pair) => pair.replace(/^([\w:.-]+)='([^']*)'$/, '$1="$2"'))
+      .sort();
+    return `<${String(tag).toLowerCase()}${canonical.length ? " " + canonical.join(" ") : ""}${close}>`;
+  });
+}
+
 function sameMarkup(a: string, b: string): boolean {
   if (a === b) return true;
   const normalize = normalizeMarkup;
@@ -137,7 +156,7 @@ export function deriveBlocks(baseline: Block[], ops: Op[]): DerivedBlock[] {
        * way.
        */
       const markupOnly =
-        !changed && normalizeMarkup(html) !== normalizeMarkup(block.html);
+        !changed && normalizeAttributes(html) !== normalizeAttributes(block.html);
       const growth = block.text.length > 0 ? text.length / block.text.length : null;
 
       return {

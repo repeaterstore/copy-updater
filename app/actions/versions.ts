@@ -1,8 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { db, schema } from "@/db";
+import { versionStatus } from "@/db/schema";
 import { OpListSchema } from "@/lib/ops/schema";
 import type { Op } from "@/lib/ops/types";
 import type { VersionStatus } from "@/db/schema";
@@ -36,6 +37,13 @@ export async function createVersionAction(input: {
       where: eq(schema.versions.id, input.parentVersionId),
     });
     if (!parent) throw new Error("Parent version not found.");
+    // A fork inherits its parent's ops, and those ops name blocks of the
+    // parent's page. Taken from another page they describe a document this
+    // snapshot has never seen: a version full of someone else's copy, an
+    // unresolvable op list, and a comparison against an unrelated baseline.
+    if (parent.pageId !== input.pageId) {
+      throw new Error("That version belongs to a different page.");
+    }
     ops = parent.ops;
   }
 
@@ -89,6 +97,27 @@ export async function saveOpsAction(
     };
   }
 
+  /*
+   * Claimed rather than checked.
+   *
+   * The status was read a moment ago, and an approval landing in between would
+   * make this write changes to a version somebody has already signed off. The
+   * update refuses to touch an approved row, so whichever of the two arrives
+   * second loses — which is the point of approving something.
+   */
+  const [claimed] = await db
+    .update(schema.versions)
+    .set({ updatedAt: new Date() })
+    .where(and(eq(schema.versions.id, versionId), ne(schema.versions.status, "approved")))
+    .returning({ id: schema.versions.id });
+
+  if (!claimed) {
+    return {
+      failures: [],
+      error: "This version was approved while you were editing. Fork it to keep your changes.",
+    };
+  }
+
   const { failures } = await setVersionOps(versionId, parsed.data);
   revalidatePath(`/pages/${version.pageId}`);
   return { failures: failures.map((f) => ({ reason: f.reason })) };
@@ -99,6 +128,19 @@ export async function setVersionStatusAction(
   status: VersionStatus,
 ): Promise<void> {
   await requireUser();
+
+  /*
+   * Checked at runtime, because the type is not a guard.
+   *
+   * A server action is a public endpoint and its arguments arrive as JSON, so
+   * `VersionStatus` says what a caller *should* send and nothing about what one
+   * can. The column is plain text with no constraint behind it, so an
+   * unrecognised value would be stored and every screen would then have to cope
+   * with a status the app has never heard of.
+   */
+  if (!(versionStatus as readonly string[]).includes(status)) {
+    throw new Error(`Unknown status "${status}".`);
+  }
 
   const version = await db.query.versions.findFirst({
     where: eq(schema.versions.id, versionId),

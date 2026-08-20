@@ -601,3 +601,23 @@ test("a parse round trip is still not a change", () => {
   assert.equal(row.changed, false);
   assert.equal(row.restyled, false, "reformatting is not a restyle");
 });
+
+test("reordered attributes and quote style are not a restyle", () => {
+  // What a parse and re-serialise is free to do. Calling it a restyle puts a
+  // badge and a change count on every block of a freshly forked version — the
+  // false positive the text comparison exists to avoid, by another door.
+  const page = `<!doctype html><html><body><main>
+    <section><p class="lede" id="x" data-role="intro">Boost your signal today.</p></section>
+  </main></body></html>`;
+  const blocks = withBoxes(blocksOf(page), () => true);
+  const para = blocks.find((b) => b.text.startsWith("Boost"))!;
+
+  // Same element, attributes in another order and single-quoted.
+  const reordered = para.html;
+  const rows = deriveBlocks(blocks, [
+    { t: "setText", id: para.id, html: reordered.replace(/"/g, "'") },
+  ]);
+  const row = rows.find((d) => d.block.id === para.id)!;
+  assert.equal(row.changed, false);
+  assert.equal(row.restyled, false, "quote style alone is not a change");
+});

@@ -60,7 +60,12 @@ export function readRemembered<T>(
       store.removeItem(PREFIX + key);
       return null;
     }
-    return valid(parsed.v) ? parsed.v : null;
+    if (!valid(parsed.v)) return null;
+    // Restoring counts as using it. Stamping only on change meant a setting
+    // someone relied on every day still expired a week after they first chose
+    // it, which is the opposite of what the expiry is for.
+    writeRemembered(store, key, parsed.v, now);
+    return parsed.v;
   } catch {
     store.removeItem(PREFIX + key);
     return null;

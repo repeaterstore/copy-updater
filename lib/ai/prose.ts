@@ -87,11 +87,17 @@ function pivotOpsCarryingOptions(parsed: Record<string, unknown>): unknown[] | n
       if (!isRecord(alternative)) continue;
 
       const { options: _drop, ...rest } = op;
-      const merged = renameOpKeys({
-        ...rest,
-        ...(typeof alternative.html === "string" ? { html: alternative.html } : {}),
-        ...(typeof alternative.text === "string" ? { html: alternative.text } : {}),
-      });
+      // `html` wins over `text`, as it does everywhere else an alias is read.
+      // Spreading text last let the alias overwrite the canonical field, so a
+      // response carrying both would have handed over the wrong wording — and
+      // it would have passed validation, so nobody would have known.
+      const copy =
+        typeof alternative.html === "string"
+          ? alternative.html
+          : typeof alternative.text === "string"
+            ? alternative.text
+            : null;
+      const merged = renameOpKeys({ ...rest, ...(copy === null ? {} : { html: copy }) });
       opsForOption.push(merged);
 
       if (!label && typeof alternative.label === "string") label = alternative.label;

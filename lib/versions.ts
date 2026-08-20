@@ -86,14 +86,34 @@ export async function rebuildResolved(
 
   const withBoxes = { ...resolved, blocks: carryBoxes(resolved.blocks, snapshot) };
 
-  await db
+  /*
+   * Only if the row has not moved underneath us.
+   *
+   * Rebuilding reads the ops, spends seconds resolving them, then writes the
+   * result — and the start-up pass does that for every version while people are
+   * working. A save landing in between would be overwritten by a result
+   * computed from the ops it replaced, so recently typed copy would quietly
+   * revert around a deploy. Matching on `updatedAt` makes the write conditional
+   * on nothing having changed since it was read; if it has, the save that
+   * beat us already rebuilt from the newer list and there is nothing to do.
+   */
+  const [written] = await db
     .update(schema.versions)
     .set({
       resolved: withBoxes,
       ...(cleaned.length === version.ops.length ? {} : { ops: cleaned }),
       updatedAt: new Date(),
     })
-    .where(eq(schema.versions.id, versionId));
+    .where(
+      and(eq(schema.versions.id, versionId), eq(schema.versions.updatedAt, version.updatedAt)),
+    )
+    .returning({ id: schema.versions.id });
+
+  if (!written) {
+    // Someone saved while this was running. Their write is newer and was
+    // resolved from their own ops; ours is stale by definition.
+    return { resolved: withBoxes, failures };
+  }
 
   return { resolved: withBoxes, failures };
 }
